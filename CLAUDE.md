@@ -103,7 +103,8 @@ fast path for a friendlier error message, and the constraint stays authoritative
   an index to be defensible, add the index in the same migration.
 - **Claude never runs `git commit` (or anything that creates a commit) in this repo, full
   stop — no exceptions, even at a phase boundary that `docs/roadmap.md` marks "commit after
-  each phase."** Leave changes staged or unstaged and let the owner review and commit them
-  personally.
+  each phase."** Also never run `git add` / stage changes after making an edit. Leave the
+  working tree exactly as the edits left it — unstaged — and let the owner review, stage, and
+  commit personally.
 
 Topic-specific rules live in `.claude/rules/` and load when the matching files are opened.

@@ -1,0 +1,162 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  email        String   @unique
+  passwordHash String
+  role         Role     @default(USER)
+  createdAt    DateTime @default(now()) @db.Timestamptz()
+
+  bookings      Booking[]
+  bookingSeries BookingSeries[]
+  auditEvents   AuditEvent[]
+
+  @@map("users")
+}
+
+model Room {
+  id       String  @id @default(uuid()) @db.Uuid
+  name     String
+  location String
+  capacity Int
+  active   Boolean @default(true)
+
+  equipment     RoomEquipment[]
+  bookings      Booking[]
+  bookingSeries BookingSeries[]
+  auditEvents   AuditEvent[]
+
+  @@map("rooms")
+}
+
+model Equipment {
+  id    String @id @default(uuid()) @db.Uuid
+  key   String @unique
+  label String
+
+  rooms RoomEquipment[]
+
+  @@map("equipment")
+}
+
+// Pure join table for the room <-> equipment many-to-many relationship.
+model RoomEquipment {
+  roomId      String @db.Uuid
+  equipmentId String @db.Uuid
+
+  room      Room      @relation(fields: [roomId], references: [id], onDelete: Cascade)
+  equipment Equipment @relation(fields: [equipmentId], references: [id], onDelete: Cascade)
+
+  @@id([roomId, equipmentId])
+  // Serves the equipment filter in the availability search, which joins from
+  // the equipment side (`re."equipmentId" = ANY($equipmentIds)`).
+  @@index([equipmentId])
+  @@map("room_equipment")
+}
+
+model BookingSeries {
+  id     String @id @default(uuid()) @db.Uuid
+  roomId String @db.Uuid
+  userId String @db.Uuid
+
+  // 0 = Sunday .. 6 = Saturday, matching JS Date#getDay().
+  weekday Int
+
+  // Minutes since local midnight (0-1439), not a `time`/`Date` value: recurrence
+  // is computed by adding whole days in the series' own timezone (see
+  // booking-domain.md), and plain integers avoid the epoch-anchored `Date`
+  // objects Prisma's `@db.Time` mapping would otherwise force into that math.
+  localStartMinutes Int
+  localEndMinutes   Int
+
+  // IANA zone name (e.g. "Asia/Kolkata"). Recurrence is computed in this zone
+  // and converted to UTC only when writing each occurrence's startsAt/endsAt.
+  timezone        String
+  occurrenceCount Int
+
+  createdAt DateTime @default(now()) @db.Timestamptz()
+
+  room     Room      @relation(fields: [roomId], references: [id])
+  user     User      @relation(fields: [userId], references: [id])
+  bookings Booking[]
+
+  @@index([roomId])
+  @@index([userId])
+  @@map("booking_series")
+}
+
+enum BookingStatus {
+  CONFIRMED
+  CANCELLED
+}
+
+model Booking {
+  id       String @id @default(uuid()) @db.Uuid
+  roomId   String @db.Uuid
+  userId   String @db.Uuid
+  seriesId String? @db.Uuid
+
+  // Half-open [startsAt, endsAt): a booking ending at 11:00 and one starting at
+  // 11:00 do not overlap. Enforced together with roomId by the
+  // bookings_no_overlap exclusion constraint added in a hand-written
+  // migration — see docs/adr/0001-double-booking-prevention.md.
+  startsAt DateTime @db.Timestamptz()
+  endsAt   DateTime @db.Timestamptz()
+
+  status      BookingStatus @default(CONFIRMED)
+  createdAt   DateTime      @default(now()) @db.Timestamptz()
+  cancelledAt DateTime?     @db.Timestamptz()
+
+  room   Room           @relation(fields: [roomId], references: [id])
+  user   User           @relation(fields: [userId], references: [id])
+  series BookingSeries? @relation(fields: [seriesId], references: [id])
+
+  auditEvents AuditEvent[]
+
+  // Serves "my bookings" (GET /api/bookings), filtered and ordered by owner.
+  @@index([userId, startsAt])
+  // Serves cancelling the remaining occurrences of a series.
+  @@index([seriesId])
+  @@map("bookings")
+}
+
+enum AuditAction {
+  BOOKING_CREATED
+  BOOKING_REJECTED_OVERLAP
+  BOOKING_CANCELLED
+  BOOKING_SHORTENED
+  SERIES_CREATED
+  SERIES_CANCELLED
+}
+
+model AuditEvent {
+  id         String      @id @default(uuid()) @db.Uuid
+  occurredAt DateTime    @default(now()) @db.Timestamptz()
+  actorId    String      @db.Uuid
+  action     AuditAction
+  roomId     String      @db.Uuid
+  bookingId  String?     @db.Uuid
+  outcome    String
+  requestId  String?
+  payload    Json?
+
+  actor   User     @relation(fields: [actorId], references: [id])
+  room    Room     @relation(fields: [roomId], references: [id])
+  booking Booking? @relation(fields: [bookingId], references: [id])
+
+  @@index([actorId])
+  @@index([bookingId])
+  @@map("audit_events")
+}

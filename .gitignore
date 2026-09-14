@@ -17,6 +17,9 @@
 /.next/
 /out/
 
+# prisma — generated client, regenerate with `yarn prisma generate`
+/src/generated/
+
 # production
 /build
 

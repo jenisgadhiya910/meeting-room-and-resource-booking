@@ -22,6 +22,8 @@ checkbox per phase.
 cp .env.example .env      # adjust POSTGRES_PORT if 5433 is also taken
 docker compose up db -d   # starts Postgres only — the app itself still runs on the host
 yarn install
+yarn db:migrate           # applies all migrations, including the exclusion constraint
+yarn db:seed              # seeds the accounts, rooms and equipment below
 yarn dev
 ```
 
@@ -35,6 +37,18 @@ curl localhost:3000/api/health
 Full containerisation of the app itself (a `web` service, multi-stage Dockerfile,
 non-interactive migrations on boot) lands in a later phase — see `docs/roadmap.md`. Until then,
 Docker Compose only runs the database.
+
+## Seeded accounts
+
+`yarn db:seed` is idempotent — safe to re-run — and creates:
+
+| Email               | Role  | Password       |
+| ------------------- | ----- | -------------- |
+| `alice@example.com` | USER  | `Password123!` |
+| `admin@example.com` | ADMIN | `Password123!` |
+
+plus 4 rooms (Alpha, Beta, Gamma, Delta) with a mix of projector / video-conferencing /
+whiteboard equipment. There's no login route yet — that's Phase 3.
 
 ## Environment variables
 

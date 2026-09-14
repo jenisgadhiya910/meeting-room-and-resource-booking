@@ -44,7 +44,7 @@ Walk me through why the exclusion constraint can't be expressed in schema.prisma
 
 **Verify:** `yarn db:migrate`, `yarn db:seed`, inspect the constraint in `yarn db:studio` or psql.
 
-- [ ] Done
+- [x] Done
 
 ## Phase 3 — Auth
 
