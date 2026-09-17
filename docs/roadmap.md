@@ -90,7 +90,7 @@ Use the seeded accounts from README.md. No signup UI — matches the backend.
 **Verify:** log in through the browser with a seeded account, refresh the page and confirm the
 session persists, log out, confirm you're redirected away from the authenticated shell.
 
-- [ ] Done
+- [x] Done
 
 ## Phase 5 — Room catalogue & availability search (backend)
 
