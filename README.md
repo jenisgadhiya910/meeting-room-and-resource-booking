@@ -48,7 +48,23 @@ Docker Compose only runs the database.
 | `admin@example.com` | ADMIN | `Password123!` |
 
 plus 4 rooms (Alpha, Beta, Gamma, Delta) with a mix of projector / video-conferencing /
-whiteboard equipment. There's no login route yet — that's Phase 3.
+whiteboard equipment.
+
+## Auth
+
+```bash
+curl -i -c cookies.txt -X POST localhost:3000/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"alice@example.com","password":"Password123!"}'
+
+curl -b cookies.txt localhost:3000/api/auth/me
+curl -b cookies.txt -X POST localhost:3000/api/auth/logout
+```
+
+Sessions are a signed JWT in an `httpOnly`, `sameSite=lax` cookie (7-day expiry, `secure` in
+production). Login responses don't distinguish "no such account" from "wrong password", and the
+route is rate-limited to 5 attempts per minute per IP (`429 RATE_LIMITED`). There's no signup
+flow — only the seeded accounts above can log in.
 
 ## Environment variables
 
@@ -57,6 +73,7 @@ whiteboard equipment. There's no login route yet — that's Phase 3.
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | Credentials the `db` container is initialised with.                                                                                        |
 | `POSTGRES_PORT`                                       | Host port the `db` container is published on. Defaults to `5433`, not `5432`, since a local Postgres install commonly already owns `5432`. |
 | `DATABASE_URL`                                        | Connection string the app uses to reach Postgres. Keep the host/port/user/password/db in sync with the `POSTGRES_*` values above.          |
+| `SESSION_SECRET`                                      | Signs/verifies the session JWT. At least 32 characters; rotating it invalidates every existing session.                                    |
 
 ## Documented decisions
 

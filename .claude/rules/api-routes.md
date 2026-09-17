@@ -14,8 +14,6 @@ A handler does exactly four things: resolve the session, parse input, call one s
 the result to a response. No Prisma, no business rules, no date arithmetic.
 
 ```ts
-export const runtime = 'nodejs';
-
 export const POST = withRoute(async ({ request, user }) => {
   const body = createBookingSchema.parse(await request.json());
   const booking = await bookingService.create({ ...body, actorId: user.id });
@@ -102,7 +100,9 @@ GET    /api/admin/utilisation           roomId?, from, to → hours booked vs av
 - Filtering, sorting and pagination are query parameters parsed by zod, then pushed into SQL.
   Never fetch everything and filter in JavaScript.
 - Collections are paginated with `limit`/`cursor`; default `limit` 50, hard cap 200.
-- All handlers that touch Prisma declare `export const runtime = 'nodejs'`. The Prisma client
-  does not run on the edge runtime.
+- Don't declare `export const runtime = 'nodejs'` — every route handler already runs on the
+  Node.js runtime by default in Next.js 16 unless it opts into `edge` explicitly, so the
+  declaration is redundant. (No route here opts into `edge` — the Prisma client couldn't run on
+  it anyway.)
 - Route handlers are dynamic by default in Next.js 16, so no cache opt-out is needed. Do not
   add `'use cache'` to anything that reads booking state.

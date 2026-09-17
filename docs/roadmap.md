@@ -6,6 +6,11 @@ to be re-explained. `CLAUDE.md` and `.claude/rules/**` stay loaded throughout an
 of truth for how each phase should be implemented — this file only tracks sequencing and
 progress.
 
+Backend and frontend phases are interleaved on purpose: each backend phase is followed by a
+smaller frontend phase that puts it in front of a browser, rather than leaving all UI work until
+the end. That way every backend feature gets tested two ways — via curl/scripts right after it's
+built, and again in the browser one phase later.
+
 Check a phase off once its "Verify" step passes, before starting the next one.
 
 ## Phase 1 — Foundations (repo, Docker db, env, skeleton)
@@ -46,7 +51,7 @@ Walk me through why the exclusion constraint can't be expressed in schema.prisma
 
 - [x] Done
 
-## Phase 3 — Auth
+## Phase 3 — Auth (backend)
 
 **Learn:** sessions, password hashing, the `withRoute` wrapper pattern.
 
@@ -62,9 +67,32 @@ keeps route handlers free of auth logic.
 **Verify:** log in via curl, get the cookie, confirm a deliberately-protected test route 401s
 without it.
 
+- [x] Done
+
+## Phase 4 — Frontend: auth
+
+**Learn:** App Router client components, a typed fetch wrapper, cookie-based sessions on the
+client.
+
+```
+Build the auth UI in src/app/(app)/ using Tailwind (already set up):
+- A login page: email/password form, calls POST /api/auth/login, shows a clear error for
+  invalid credentials and for a 429 rate-limit response
+- A small typed fetch helper (e.g. src/lib/api-client.ts) that unwraps the { data } / { error }
+  envelope from api-routes.md into something the UI can branch on — later frontend phases
+  reuse this rather than each hand-rolling fetch + envelope parsing
+- A logout action calling POST /api/auth/logout, redirecting back to the login page
+- A minimal authenticated shell page (e.g. "/") that calls GET /api/auth/me to show the
+  logged-in user's email — a placeholder until Phase 6 gives it real content
+Use the seeded accounts from README.md. No signup UI — matches the backend.
+```
+
+**Verify:** log in through the browser with a seeded account, refresh the page and confirm the
+session persists, log out, confirm you're redirected away from the authenticated shell.
+
 - [ ] Done
 
-## Phase 4 — Room catalogue & availability search
+## Phase 5 — Room catalogue & availability search (backend)
 
 **Learn:** filtering in SQL (not in JS), the `NOT EXISTS` overlap-probe query.
 
@@ -82,7 +110,27 @@ correctly excluded.
 
 - [ ] Done
 
-## Phase 5 — Booking creation (the core feature)
+## Phase 6 — Frontend: room search
+
+**Learn:** forms driving query params, rendering search results, empty states.
+
+```
+Build the room search page in src/app/(app)/ (this becomes the authenticated shell's real
+content from Phase 4):
+- A search form: date, start/end time, minimum capacity, equipment checkboxes
+- Calls GET /api/rooms/availability with the form values as query params, using the fetch
+  helper from Phase 4
+- Renders matching rooms (name, location, capacity, equipment) as a results list, with a
+  clear empty state when nothing matches
+No booking action yet — that's the next phase.
+```
+
+**Verify:** search with a few different filter combinations in the browser and confirm the
+results match what curl showed in Phase 5.
+
+- [ ] Done
+
+## Phase 7 — Booking creation (backend, the core feature)
 
 **Learn:** transactions, translating a Postgres SQLSTATE into an API error.
 
@@ -102,7 +150,24 @@ No recurring series yet. Show me the exact sequence when the exclusion constrain
 
 - [ ] Done
 
-## Phase 6 — Concurrency verification script (the headline demo)
+## Phase 8 — Frontend: booking
+
+**Learn:** optimistic vs. confirmed UI, surfacing a specific 409 instead of a generic error.
+
+```
+Add booking to the search results from Phase 6:
+- A "Book" action per result opening a confirm step (or inline form) for the exact slot
+- Calls POST /api/bookings; on success show a clear confirmation
+- On 409 ROOM_ALREADY_BOOKED, show "someone beat you to it" — not a generic error — and let
+  the user search again
+- On other errors (VALIDATION_FAILED, UNAUTHENTICATED), show a sensible message too
+```
+
+**Verify:** book a room end to end in the browser.
+
+- [ ] Done
+
+## Phase 9 — Concurrency verification script (the headline demo)
 
 **Learn:** what "genuinely simultaneous" means, `Promise.all` races.
 
@@ -113,11 +178,13 @@ one 201 and one 409 ROOM_ALREADY_BOOKED. Wire it as `yarn verify:concurrency`. R
 times in a row and explain why a single passing run isn't sufficient evidence.
 ```
 
-**Verify:** `yarn verify:concurrency` passes repeatedly, including back-to-back runs.
+**Verify:** `yarn verify:concurrency` passes repeatedly, including back-to-back runs. As a bonus
+now that the booking UI exists (Phase 8), open two browser tabs and try to book the same slot
+from both to see the 409 surface in the UI — but the script, not the tabs, is the real evidence.
 
 - [ ] Done
 
-## Phase 7 — Cancel, shorten & ownership
+## Phase 10 — Cancel, shorten & ownership (backend)
 
 **Learn:** authorization-in-service-layer, time-based business rules.
 
@@ -136,7 +203,26 @@ immediately.
 
 - [ ] Done
 
-## Phase 8 — Recurring bookings
+## Phase 11 — Frontend: cancel & shorten (My bookings)
+
+**Learn:** rendering owned resources, PATCH/DELETE from the client, keeping the list in sync
+after a mutation.
+
+```
+Build "My bookings" in src/app/(app)/:
+- Lists the caller's own bookings (GET /api/bookings)
+- Cancel action per booking (DELETE /api/bookings/:id), confirm before cancelling
+- Shorten action (PATCH /api/bookings/:id, endsAt earlier) with a simple time picker
+- Surface BOOKING_NOT_MODIFIABLE clearly (e.g. "this booking can no longer be changed")
+- After cancel/shorten, the list reflects the change immediately (refetch or optimistic update)
+```
+
+**Verify:** cancel a booking and confirm the slot is immediately bookable again in the search
+page from Phase 6; try to shorten an already-ended booking and see the clear error.
+
+- [ ] Done
+
+## Phase 12 — Recurring bookings (backend)
 
 **Learn:** materialized occurrences vs. one row per series, all-or-nothing transactions,
 DST-safe recurrence.
@@ -155,7 +241,26 @@ Implement recurring series per .claude/rules/booking-domain.md:
 
 - [ ] Done
 
-## Phase 9 — Utilisation view
+## Phase 13 — Frontend: recurring booking
+
+**Learn:** presenting an all-or-nothing conflict result in a form.
+
+```
+Add a "recurring" option to the booking flow from Phase 8:
+- Weekday, time, and week-count fields on the booking form
+- Calls POST /api/bookings with the recurring payload
+- On rejection, show details.conflicts clearly (which dates/times clashed) and make it obvious
+  nothing partial was booked
+- The series shows up in "My bookings" (Phase 11) as its individual occurrences
+```
+
+**Verify:** create a recurring series that deliberately conflicts on one week, confirm the
+conflict is shown clearly and nothing partial was booked; cancel one occurrence from "My
+bookings" and confirm the rest of the series is untouched.
+
+- [ ] Done
+
+## Phase 14 — Utilisation view (backend)
 
 **Learn:** aggregate SQL, `date_trunc`, admin-only routes, explaining a query plan.
 
@@ -172,44 +277,25 @@ Run EXPLAIN on the aggregate query and walk me through whether the index is bein
 
 - [ ] Done
 
-## Phase 10 — Frontend: search, booking, my bookings
+## Phase 15 — Frontend: admin utilisation
 
-**Learn:** App Router data fetching, forms, client-side state for a booking flow.
+**Learn:** a simple aggregate dashboard, gating a page behind a role on both server and client.
 
 ```
-Build the core UI in src/app/(app)/ using Tailwind (already set up):
-- Login page
-- Room search page: date/time range, min capacity, equipment checkboxes → results
-- Book a room from a search result, with confirmation and a clear error state for
-  ROOM_ALREADY_BOOKED (someone beat you to it, not a generic error)
-- "My bookings" page listing own bookings with cancel and shorten actions
-No recurring UI or admin UI yet — those are next.
+Build the admin utilisation page in src/app/(app)/:
+- Room selector, date range
+- Calls GET /api/admin/utilisation and renders hours booked vs. available per week as a table
+  or simple chart
+- Gate the page behind the admin role, checked against the session (not just a hidden nav
+  link) — a non-admin hitting the URL directly should not see the data
 ```
 
-**Verify:** run the golden path in the browser end to end; then open two tabs and try to book
-the same slot from both to see the 409 surface properly.
+**Verify:** log in as the seeded admin account and view utilisation across a date range; log in
+as the regular seeded user and confirm the page is inaccessible.
 
 - [ ] Done
 
-## Phase 11 — Frontend: recurring booking + admin utilisation
-
-**Learn:** presenting an all-or-nothing conflict result, a simple aggregate dashboard.
-
-```
-Add to the UI:
-- A "recurring" option on the booking form (weekday, time, week count), showing
-  details.conflicts clearly if the series is rejected
-- An admin utilisation page: room selector, date range, table or simple chart of hours
-  booked vs. available per week
-Gate the admin page behind the admin role.
-```
-
-**Verify:** create a recurring series that deliberately conflicts on one week, confirm the
-conflict is shown clearly and nothing partial was booked.
-
-- [ ] Done
-
-## Phase 12 — Full containerization & final pass
+## Phase 16 — Full containerization & final pass
 
 **Learn:** multi-stage Docker builds, non-interactive migrations, the acceptance bar.
 
@@ -232,7 +318,8 @@ working app — no manual steps.
 
 ## Notes
 
-- Commit after each phase so there's a checkpoint to diff against.
+- Commit after each phase yourself so there's a checkpoint to diff against — Claude doesn't
+  stage or commit in this repo (see CLAUDE.md's Working agreement).
 - If a phase feels too big once you're in it, stop and ask Claude to split it further —
   `.claude/rules/**` will still load correctly on the narrower scope.
 - Ask Claude to explain concepts (sessions, exclusion constraints, App Router conventions) as
