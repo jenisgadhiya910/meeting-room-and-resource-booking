@@ -109,30 +109,41 @@ the request body.
 
 ## Availability search
 
-One query. Given `from`, `to`, `minCapacity` and a set of required equipment keys, return
+One query, built with Prisma's query builder (see prisma-postgres.md for why raw SQL isn't the
+default here). Given `from`, `to`, `minCapacity` and a set of required equipment keys, return
 rooms free for the _entire_ window:
 
-```sql
-SELECT r.*
-FROM rooms r
-JOIN room_equipment re ON re."roomId" = r.id
-WHERE r.active
-  AND r.capacity >= $minCapacity
-  AND re."equipmentId" = ANY($equipmentIds)
-  AND NOT EXISTS (
-    SELECT 1 FROM bookings b
-    WHERE b."roomId" = r.id
-      AND b.status = 'CONFIRMED'
-      AND tstzrange(b."startsAt", b."endsAt", '[)') && tstzrange($from, $to, '[)')
-  )
-GROUP BY r.id
-HAVING count(DISTINCT re."equipmentId") = $requiredEquipmentCount;
+```ts
+const rooms = await prisma.room.findMany({
+  where: {
+    active: true,
+    capacity: { gte: minCapacity },
+    // AND-filter: one `some` per required key, not a HAVING count(DISTINCT ...).
+    AND: equipmentKeys.map((key) => ({
+      equipment: { some: { equipment: { key } } },
+    })),
+    // No confirmed booking overlaps [from, to): [a,b) && [c,d) <=> a < d AND b > c.
+    bookings: {
+      none: { status: 'CONFIRMED', startsAt: { lt: to }, endsAt: { gt: from } },
+    },
+  },
+  select: {
+    id: true,
+    name: true,
+    location: true,
+    capacity: true,
+    equipment: {
+      select: { equipment: { select: { key: true, label: true } } },
+    },
+  },
+});
 ```
 
-The `HAVING count(DISTINCT ...)` is what makes equipment filtering an AND rather than an OR.
-Drop the join and the `HAVING` when no equipment is requested rather than passing an empty
-array. The GiST index created by the exclusion constraint serves the `NOT EXISTS` overlap
-probe; no separate index is needed for it.
+An empty `equipmentKeys` array makes `AND: []` a no-op, so there's no special case for "no
+equipment filter requested". Be ready to explain the trade-off this makes versus the exclusion
+constraint's own `tstzrange(...) && tstzrange(...)` check: this shape doesn't get the GiST
+index's range-search benefit the way a raw `&&` query would (measured — see prisma-postgres.md)
+— accepted deliberately at this POC's data volume in favour of staying in the query builder.
 
 ## Utilisation
 

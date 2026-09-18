@@ -73,20 +73,40 @@ elsewhere. `src/generated/prisma/` is gitignored and never edited by hand; regen
 
 ## Query rules
 
-- Filtering, aggregation and grouping happen in SQL. Loading rows to count or filter them in
-  TypeScript is a defect, not a style preference, and the utilisation view and availability
-  search are both explicitly checked for this.
+- Filtering, aggregation and grouping happen in the database. Loading rows to count or filter
+  them in TypeScript is a defect, not a style preference, and the utilisation view and
+  availability search are both explicitly checked for this.
+- **Prefer Prisma's query builder over raw SQL.** This project is also a Prisma-learning
+  exercise, so reach for `findMany`/`where`/relation filters first, even where raw SQL would be
+  more direct. Two techniques worth knowing because they don't look Prisma-shaped at first:
+  - AND-filtering a many-to-many relation by several values (e.g. "has every one of these
+    equipment keys") is one `some` condition per value, combined with `AND: [...]` — not a
+    `HAVING count(DISTINCT ...)` clause. An empty `AND` array is a no-op, so there's no need to
+    special-case "no filter requested".
+  - A half-open range-overlap check (no confirmed booking overlapping `[from, to)`) is
+    `bookings: { none: { status: 'CONFIRMED', startsAt: { lt: to }, endsAt: { gt: from } } }` —
+    the standard `a < d AND b > c` equivalence for `[a,b) && [c,d)`, since Prisma has no
+    equivalent of Postgres's `tstzrange`/`&&`.
+  - Known trade-off, measured on the availability search: the two-comparison form above does
+    not get the same GiST range-search benefit a raw `tstzrange(...) && tstzrange(...)` query
+    gets from the `bookings_no_overlap` index — Postgres restructures the Prisma-generated
+    query into a join across all matching rows rather than a per-room indexed probe. At the
+    data volumes this POC runs at, it's not worth the raw SQL; if booking history ever grows
+    into the tens of thousands of rows and this query shows up in slow-query logs, that's the
+    point to revisit it with `$queryRaw` for just the overlap condition — not preemptively now.
+  - `$queryRaw` is still the right call for anything the query builder genuinely cannot express
+    at all — grouping by a computed expression like `date_trunc('week', "startsAt")` (the
+    utilisation aggregate) has no query-builder equivalent, for instance.
 - Prefer `select` over `include`, and list the fields. Returning whole rows leaks columns and
   makes the response shape accidental.
-- Avoid N+1: one query with a join or a batched `in` clause, never a `findUnique` inside a
-  loop.
-- Use `$queryRaw` with tagged-template parameters (never string concatenation) when the query
-  is genuinely beyond the query builder — the availability search and the utilisation
-  aggregate are the expected cases. Type the result with an explicit interface and validate it
-  with zod if it crosses into the service layer.
+- Avoid N+1: one query with a join/nested `select`, never a `findUnique` inside a loop.
+- When `$queryRaw` is genuinely warranted, use tagged-template parameters (never string
+  concatenation). Type the result with an explicit interface and validate it with zod if it
+  crosses into the service layer.
 - Every foreign key and every column used in a `WHERE`, `ORDER BY` or `JOIN` on a hot path
   needs an index, added in the same migration. Say in the migration comment which query it
-  serves.
+  serves — and don't add one speculatively; confirm with `EXPLAIN ANALYZE` that a query
+  actually benefits from it before keeping it.
 
 ## Transactions
 

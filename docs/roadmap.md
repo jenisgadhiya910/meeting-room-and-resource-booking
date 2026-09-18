@@ -94,21 +94,24 @@ session persists, log out, confirm you're redirected away from the authenticated
 
 ## Phase 5 — Room catalogue & availability search (backend)
 
-**Learn:** filtering in SQL (not in JS), the `NOT EXISTS` overlap-probe query.
+**Learn:** filtering with Prisma's query builder (not in JS), relation filters for AND-semantics
+and range overlap.
 
 ```
 Implement the room module per .claude/rules/booking-domain.md and .claude/rules/api-routes.md:
 - room.schema.ts / .service.ts / .repository.ts
 - GET /api/rooms — filter by capacity and equipment
 - GET /api/rooms/availability — the real free-for-the-whole-window query, not a client filter
-No auth needed on these (browsing is public). Explain the HAVING count(DISTINCT...) trick for
-AND-filtering equipment.
+No auth needed on these (browsing is public). Use Prisma's query builder throughout (findMany,
+where, relation filters) rather than $queryRaw. Explain how `some`/`AND` express the equipment
+AND-filter and how `startsAt`/`endsAt` comparisons express half-open range overlap without a
+Postgres range operator — and the indexing trade-off that comes with it.
 ```
 
 **Verify:** curl several filter combinations, confirm a room with a partial-overlap booking is
 correctly excluded.
 
-- [ ] Done
+- [x] Done
 
 ## Phase 6 — Frontend: room search
 
@@ -128,7 +131,7 @@ No booking action yet — that's the next phase.
 **Verify:** search with a few different filter combinations in the browser and confirm the
 results match what curl showed in Phase 5.
 
-- [ ] Done
+- [x] Done
 
 ## Phase 7 — Booking creation (backend, the core feature)
 
