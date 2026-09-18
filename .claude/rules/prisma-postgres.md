@@ -124,3 +124,10 @@ Catch `PrismaClientKnownRequestError` and map by code rather than string-matchin
 `P2002` unique violation, `P2003` foreign key violation, `P2025` record not found. Exclusion
 constraint violations arrive from the pg driver as SQLSTATE `23P01` — see the booking-domain
 rule for how those are detected and surfaced.
+
+For `P2002` specifically: with the `@prisma/adapter-pg` driver adapter, don't trust the
+`meta.target` column-array shape most Prisma docs and tutorials describe (that's the classic
+Rust query engine's format). Confirmed by hand on this stack — the actual shape nests the
+violated constraint's _index name_ under `meta.driverAdapterError.cause.constraint.index`
+instead. Parse `error.meta` with a small zod schema rather than assuming either shape; see
+`room.service.ts` for the pattern.

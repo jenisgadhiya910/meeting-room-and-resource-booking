@@ -83,7 +83,7 @@ Build the auth UI in src/app/(app)/ using Tailwind (already set up):
   reuse this rather than each hand-rolling fetch + envelope parsing
 - A logout action calling POST /api/auth/logout, redirecting back to the login page
 - A minimal authenticated shell page (e.g. "/") that calls GET /api/auth/me to show the
-  logged-in user's email — a placeholder until Phase 6 gives it real content
+  logged-in user's email — a placeholder until Phase 8 gives it real content
 Use the seeded accounts from README.md. No signup UI — matches the backend.
 ```
 
@@ -92,7 +92,63 @@ session persists, log out, confirm you're redirected away from the authenticated
 
 - [x] Done
 
-## Phase 5 — Room catalogue & availability search (backend)
+## Phase 5 — Admin: rooms & equipment (backend)
+
+**Learn:** role-gated routes, a foreign key that must allow deletion, snapshotting for
+historical accuracy.
+
+```
+Implement admin room/equipment management per .claude/rules/booking-domain.md and
+.claude/rules/api-routes.md:
+- POST /api/admin/rooms — create (name, location, capacity, optional equipmentKeys)
+- PATCH /api/admin/rooms/:id — partial update (name, location, capacity, active, equipmentKeys)
+- DELETE /api/admin/rooms/:id
+- POST /api/admin/equipment — create (key, label)
+- Add a unique constraint on Room.name — admin-created rooms shouldn't silently collide
+- Block update/delete with 409 ROOM_HAS_ACTIVE_OR_FUTURE_BOOKINGS while the room has any
+  CONFIRMED booking that hasn't ended yet
+- Make Booking.roomId, BookingSeries.roomId and AuditEvent.roomId nullable with ON DELETE
+  SET NULL (not RESTRICT), so a room with only past bookings can still be deleted without
+  its history blocking the delete forever
+- Add Booking.roomSnapshot (name/location/capacity/equipment, captured once at booking
+  creation) — a booking always displays this, never a live join to room, so a past booking
+  keeps showing what was true when it was made even after the room is later renamed or deleted
+Extend withRoute with a { role: 'ADMIN' } mode alongside the existing auth-required/optional
+modes, reusing requireUser() rather than a separate role lookup. Map a duplicate name/key
+(P2002) to a clear 409, not a generic 500 — and note that the driver adapter's error shape for
+this isn't what the Prisma docs describe, so it's worth confirming by hand.
+```
+
+**Verify:** log in as the seeded admin, create/update/delete a room and create an equipment
+type via curl; confirm the regular seeded user gets 403; confirm a room with an active/future
+booking can't be updated or deleted; confirm deleting a room whose only booking is in the past
+succeeds, and that booking still shows its original room details afterward.
+
+- [x] Done
+
+## Phase 6 — Frontend: admin rooms & equipment
+
+**Learn:** gating a page and its data behind a role, on both server and client.
+
+```
+Build an admin page in src/app/(app)/admin/ for managing rooms and equipment:
+- A form to create a room (name, location, capacity, equipment checkboxes)
+- A list of existing rooms with edit (inline or a form) and delete actions
+- A form to create a new equipment type (key, label)
+- Surface ROOM_HAS_ACTIVE_OR_FUTURE_BOOKINGS clearly when an edit/delete is blocked
+- Gate the page behind the admin role — check the session server-side, don't just hide a nav
+  link
+- New/edited rooms and equipment should appear in the Phase 8 search page without any change
+  needed there
+```
+
+**Verify:** log in as the seeded admin, create/edit/delete a room and create an equipment type
+through the UI, confirm changes show up in room search; log in as the regular seeded user and
+confirm the admin page is inaccessible.
+
+- [ ] Done
+
+## Phase 7 — Room catalogue & availability search (backend)
 
 **Learn:** filtering with Prisma's query builder (not in JS), relation filters for AND-semantics
 and range overlap.
@@ -113,7 +169,7 @@ correctly excluded.
 
 - [x] Done
 
-## Phase 6 — Frontend: room search
+## Phase 8 — Frontend: room search
 
 **Learn:** forms driving query params, rendering search results, empty states.
 
@@ -129,11 +185,11 @@ No booking action yet — that's the next phase.
 ```
 
 **Verify:** search with a few different filter combinations in the browser and confirm the
-results match what curl showed in Phase 5.
+results match what curl showed in Phase 7.
 
 - [x] Done
 
-## Phase 7 — Booking creation (backend, the core feature)
+## Phase 9 — Booking creation (backend, the core feature)
 
 **Learn:** transactions, translating a Postgres SQLSTATE into an API error.
 
@@ -143,6 +199,8 @@ and .claude/rules/security-and-audit.md:
 - booking.schema.ts / .service.ts / .repository.ts / .errors.ts
 - POST /api/bookings (auth required), GET /api/bookings (own only), GET /api/bookings/:id
 - isOverlapViolation() detecting SQLSTATE 23P01 → 409 ROOM_ALREADY_BOOKED
+- Populate Booking.roomSnapshot (name/location/capacity/equipment) at creation time — see
+  Phase 5; every booking response reads this, never a live join to room
 - audit_events rows for BOOKING_CREATED (inside the tx) and BOOKING_REJECTED_OVERLAP
   (after rollback, its own statement)
 No recurring series yet. Show me the exact sequence when the exclusion constraint fires.
@@ -153,12 +211,12 @@ No recurring series yet. Show me the exact sequence when the exclusion constrain
 
 - [ ] Done
 
-## Phase 8 — Frontend: booking
+## Phase 10 — Frontend: booking
 
 **Learn:** optimistic vs. confirmed UI, surfacing a specific 409 instead of a generic error.
 
 ```
-Add booking to the search results from Phase 6:
+Add booking to the search results from Phase 8:
 - A "Book" action per result opening a confirm step (or inline form) for the exact slot
 - Calls POST /api/bookings; on success show a clear confirmation
 - On 409 ROOM_ALREADY_BOOKED, show "someone beat you to it" — not a generic error — and let
@@ -170,7 +228,7 @@ Add booking to the search results from Phase 6:
 
 - [ ] Done
 
-## Phase 9 — Concurrency verification script (the headline demo)
+## Phase 11 — Concurrency verification script (the headline demo)
 
 **Learn:** what "genuinely simultaneous" means, `Promise.all` races.
 
@@ -182,12 +240,12 @@ times in a row and explain why a single passing run isn't sufficient evidence.
 ```
 
 **Verify:** `yarn verify:concurrency` passes repeatedly, including back-to-back runs. As a bonus
-now that the booking UI exists (Phase 8), open two browser tabs and try to book the same slot
+now that the booking UI exists (Phase 10), open two browser tabs and try to book the same slot
 from both to see the 409 surface in the UI — but the script, not the tabs, is the real evidence.
 
 - [ ] Done
 
-## Phase 10 — Cancel, shorten & ownership (backend)
+## Phase 12 — Cancel, shorten & ownership (backend)
 
 **Learn:** authorization-in-service-layer, time-based business rules.
 
@@ -206,7 +264,7 @@ immediately.
 
 - [ ] Done
 
-## Phase 11 — Frontend: cancel & shorten (My bookings)
+## Phase 13 — Frontend: cancel & shorten (My bookings)
 
 **Learn:** rendering owned resources, PATCH/DELETE from the client, keeping the list in sync
 after a mutation.
@@ -221,11 +279,11 @@ Build "My bookings" in src/app/(app)/:
 ```
 
 **Verify:** cancel a booking and confirm the slot is immediately bookable again in the search
-page from Phase 6; try to shorten an already-ended booking and see the clear error.
+page from Phase 8; try to shorten an already-ended booking and see the clear error.
 
 - [ ] Done
 
-## Phase 12 — Recurring bookings (backend)
+## Phase 14 — Recurring bookings (backend)
 
 **Learn:** materialized occurrences vs. one row per series, all-or-nothing transactions,
 DST-safe recurrence.
@@ -244,17 +302,17 @@ Implement recurring series per .claude/rules/booking-domain.md:
 
 - [ ] Done
 
-## Phase 13 — Frontend: recurring booking
+## Phase 15 — Frontend: recurring booking
 
 **Learn:** presenting an all-or-nothing conflict result in a form.
 
 ```
-Add a "recurring" option to the booking flow from Phase 8:
+Add a "recurring" option to the booking flow from Phase 10:
 - Weekday, time, and week-count fields on the booking form
 - Calls POST /api/bookings with the recurring payload
 - On rejection, show details.conflicts clearly (which dates/times clashed) and make it obvious
   nothing partial was booked
-- The series shows up in "My bookings" (Phase 11) as its individual occurrences
+- The series shows up in "My bookings" (Phase 13) as its individual occurrences
 ```
 
 **Verify:** create a recurring series that deliberately conflicts on one week, confirm the
@@ -263,7 +321,7 @@ bookings" and confirm the rest of the series is untouched.
 
 - [ ] Done
 
-## Phase 14 — Utilisation view (backend)
+## Phase 16 — Utilisation view (backend)
 
 **Learn:** aggregate SQL, `date_trunc`, admin-only routes, explaining a query plan.
 
@@ -280,7 +338,7 @@ Run EXPLAIN on the aggregate query and walk me through whether the index is bein
 
 - [ ] Done
 
-## Phase 15 — Frontend: admin utilisation
+## Phase 17 — Frontend: admin utilisation
 
 **Learn:** a simple aggregate dashboard, gating a page behind a role on both server and client.
 
@@ -298,7 +356,7 @@ as the regular seeded user and confirm the page is inaccessible.
 
 - [ ] Done
 
-## Phase 16 — Full containerization & final pass
+## Phase 18 — Full containerization & final pass
 
 **Learn:** multi-stage Docker builds, non-interactive migrations, the acceptance bar.
 

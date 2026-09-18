@@ -17,6 +17,11 @@ interface EquipmentOption {
   label: string;
 }
 
+interface EquipmentListResponse {
+  data: EquipmentOption[];
+  meta: { nextCursor: string | null };
+}
+
 const inputClassName =
   'w-full rounded-md border border-gray-300 px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900';
 
@@ -53,13 +58,14 @@ export function RoomSearch() {
   useEffect(() => {
     async function loadEquipmentOptions() {
       try {
-        const response = await apiFetch<RoomListResponse>('/api/rooms');
-        const byKey = new Map<string, EquipmentOption>();
-        for (const room of response.data) {
-          for (const item of room.equipment) byKey.set(item.key, item);
-        }
+        // From the equipment catalogue directly (GET /api/equipment), not
+        // derived from room search results — so a type shows up as a filter
+        // option even before any room actually has it.
+        const response = await apiFetch<EquipmentListResponse>(
+          '/api/equipment?limit=200',
+        );
         setEquipmentOptions(
-          [...byKey.values()].sort((a, b) => a.key.localeCompare(b.key)),
+          [...response.data].sort((a, b) => a.key.localeCompare(b.key)),
         );
       } catch {
         // Checkboxes are a nice-to-have; failing to load them shouldn't block searching.

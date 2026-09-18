@@ -15,19 +15,51 @@ paths:
 Five tables. The important choice is that **a recurring series is not one row** — occurrences
 are materialised, so cancelling one Tuesday is an update to one row and nothing else moves.
 
-- `rooms` — id, name, location, capacity, active
+- `rooms` — id, `name` (unique), location, capacity, active
 - `equipment` — id, key, label
 - `room_equipment` — join table, `@@id([roomId, equipmentId])` (many-to-many)
-- `booking_series` — id, roomId, userId, weekday, localStartTime, localEndTime, timezone,
-  occurrenceCount, createdAt
-- `bookings` — id, roomId, userId, `seriesId` (nullable), startsAt, endsAt,
-  `status` (`CONFIRMED` | `CANCELLED`), createdAt, cancelledAt
+- `booking_series` — id, `roomId` (nullable), userId, weekday, localStartTime, localEndTime,
+  timezone, occurrenceCount, createdAt
+- `bookings` — id, `roomId` (nullable), userId, `seriesId` (nullable), startsAt, endsAt,
+  `status` (`CONFIRMED` | `CANCELLED`), createdAt, cancelledAt, `roomSnapshot` (jsonb)
+
+`roomId` on `booking_series`, `bookings` and `audit_events` is nullable with `ON DELETE SET
+NULL`, not the default `RESTRICT` — see "Admin: rooms & equipment" below for why.
 
 A one-off booking is a `bookings` row with `seriesId = null`. A series is one `booking_series`
 row plus N `bookings` rows. Nothing else in the system needs to know the difference.
 
 `startsAt` / `endsAt` are `timestamptz`, half-open `[start, end)`: a booking ending at 11:00
 and one starting at 11:00 do not overlap.
+
+## Admin: rooms & equipment
+
+Admins can create, update and delete rooms, and create equipment types
+(`{ role: 'ADMIN' }` on `withRoute` — see api-routes.md).
+
+- **A room can't be updated or deleted while it has any `CONFIRMED` booking that hasn't ended
+  yet** — one where `endsAt > now()`, covering both "in progress" and "still upcoming". Reject
+  with `409 ROOM_HAS_ACTIVE_OR_FUTURE_BOOKINGS`. This is a blanket rule: it applies to every
+  field on the room, not just structural ones like `active` — there's no per-field carve-out.
+- That rule means a room can only be edited or deleted once **all** its bookings are already in
+  the past. `bookings.roomId`, `booking_series.roomId` and `audit_events.roomId` are therefore
+  nullable with `ON DELETE SET NULL` rather than the default `RESTRICT` — otherwise a room could
+  never be deleted once it had a single historical (fully past, already-cancelled-or-completed)
+  booking, ever. The row itself is never touched or deleted, only its link to the now-gone room.
+- **A booking always displays `roomSnapshot`** (name, location, capacity, equipment — captured
+  once, at booking creation), never a live join to `room`. Given the rule above, an active or
+  future booking's snapshot is always identical to the room's live data anyway (the room can't
+  have changed since), so "always show the snapshot" is simpler than conditionally choosing
+  between live and snapshot data by booking status, and it's the only option once the room has
+  been deleted (`roomId` is `null` at that point — there's nothing live to join to).
+- Room names are unique (`rooms.name`) so admin-created rooms can't silently collide.
+- A duplicate name/key is a `409` with a specific code (`ROOM_NAME_TAKEN` /
+  `EQUIPMENT_KEY_TAKEN`), detected from Prisma's `P2002`. With the `@prisma/adapter-pg` driver
+  adapter, the constraint name is not where the standard Prisma docs say to look (`meta.target`,
+  an array of column names, from the classic Rust query engine) — it's nested under
+  `meta.driverAdapterError.cause.constraint.index` instead, and it's the index name (e.g.
+  `"rooms_name_key"`), not a column list. Confirmed by hand against this exact stack; don't
+  assume the documented shape without checking.
 
 ## The overlap guarantee
 

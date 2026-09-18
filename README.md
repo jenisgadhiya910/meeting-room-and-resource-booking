@@ -66,6 +66,29 @@ production). Login responses don't distinguish "no such account" from "wrong pas
 route is rate-limited to 5 attempts per minute per IP (`429 RATE_LIMITED`). There's no signup
 flow — only the seeded accounts above can log in.
 
+## Admin: rooms & equipment
+
+```bash
+curl -i -c admin-cookies.txt -X POST localhost:3000/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"admin@example.com","password":"Password123!"}'
+
+curl -b admin-cookies.txt -X POST localhost:3000/api/admin/equipment \
+  -H 'Content-Type: application/json' -d '{"key":"standing_desk","label":"Standing desk"}'
+
+curl -b admin-cookies.txt -X POST localhost:3000/api/admin/rooms \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Epsilon","location":"Floor 3","capacity":6,"equipmentKeys":["whiteboard"]}'
+
+curl -b admin-cookies.txt -X PATCH localhost:3000/api/admin/rooms/<id> \
+  -H 'Content-Type: application/json' -d '{"capacity":8}'
+
+curl -b admin-cookies.txt -X DELETE localhost:3000/api/admin/rooms/<id>
+```
+
+Only `admin@example.com` can call these (`403 FORBIDDEN` otherwise). See "Documented decisions"
+below for the update/delete guard and why bookings never show live room data.
+
 ## Environment variables
 
 | Variable                                              | Purpose                                                                                                                                    |
@@ -77,8 +100,18 @@ flow — only the seeded accounts above can log in.
 
 ## Documented decisions
 
-Nothing to record yet — this section fills in as ambiguous requirements get resolved in later
-phases (shortening an already-started booking, the all-or-nothing recurring series rule, the
-bookable window used by the utilisation view). The one decision already made — how double
-bookings are prevented — is recorded in
-[`docs/adr/0001-double-booking-prevention.md`](./docs/adr/0001-double-booking-prevention.md).
+- **Double-booking prevention** — a PostgreSQL exclusion constraint, not application code. Full
+  rationale in
+  [`docs/adr/0001-double-booking-prevention.md`](./docs/adr/0001-double-booking-prevention.md).
+- **A room can only be updated or deleted once it has no active or future booking** — any
+  `CONFIRMED` booking with `endsAt` still in the future blocks the edit or delete with
+  `409 ROOM_HAS_ACTIVE_OR_FUTURE_BOOKINGS`. This is deliberately a blanket rule (every field,
+  not just structural ones), so once a room can be changed at all, every one of its bookings is
+  already in the past.
+- **A booking always shows the room details captured at the moment it was booked** (name,
+  location, capacity, equipment — `roomSnapshot`), never a live join to the room. Given the
+  rule above, this makes no difference for an active/future booking (the room can't have
+  changed since), but it's what makes a past booking keep showing what was actually true when
+  it was made — even after the room is later renamed, recapacitated, or deleted entirely.
+- Still to resolve in later phases: shortening an already-started booking, the all-or-nothing
+  recurring series rule, and the bookable window used by the utilisation view.

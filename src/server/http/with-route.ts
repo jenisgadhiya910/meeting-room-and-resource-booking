@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { getSession, requireUser } from '@/server/auth/session';
 import { logger } from '@/server/logger';
 
-import { AppError } from './errors';
+import { AppError, ForbiddenError } from './errors';
 import { errorResponse } from './response';
 
 import type { SessionUser } from '@/server/auth/session';
@@ -42,6 +42,11 @@ type NextRouteHandler<Params> = (
 export function withRoute<Params = Record<string, never>>(
   handler: RequiredAuthHandler<Params>,
 ): NextRouteHandler<Params>;
+/** Admin-only routes: resolves a session and requires role ADMIN, or throws FORBIDDEN. */
+export function withRoute<Params = Record<string, never>>(
+  handler: RequiredAuthHandler<Params>,
+  options: { role: 'ADMIN' },
+): NextRouteHandler<Params>;
 /** Public/browsable routes that still want the session when one happens to be present. */
 export function withRoute<Params = Record<string, never>>(
   handler: OptionalAuthHandler<Params>,
@@ -49,7 +54,7 @@ export function withRoute<Params = Record<string, never>>(
 ): NextRouteHandler<Params>;
 export function withRoute<Params>(
   handler: RequiredAuthHandler<Params> | OptionalAuthHandler<Params>,
-  options?: { auth?: 'optional' },
+  options?: { auth?: 'optional'; role?: 'ADMIN' },
 ): NextRouteHandler<Params> {
   const authOptional = options?.auth === 'optional';
 
@@ -59,6 +64,14 @@ export function withRoute<Params>(
 
     try {
       const user = authOptional ? await getSession() : await requireUser();
+
+      // Reuses the same session requireUser() already resolved — no separate role lookup.
+      if (
+        options?.role !== undefined &&
+        (!user || user.role !== options.role)
+      ) {
+        throw new ForbiddenError();
+      }
 
       const response = authOptional
         ? await (handler as OptionalAuthHandler<Params>)({

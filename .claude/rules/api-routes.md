@@ -88,6 +88,11 @@ Design them REST-shaped and resource-first; the spec prescribes no particular se
 ```
 GET    /api/rooms                       filter by capacity + equipment
 GET    /api/rooms/availability          date, from, to, minCapacity, equipment[] → free rooms
+GET    /api/equipment                   the equipment catalogue (for filter UIs) — public
+POST   /api/admin/rooms                 create a room (admin)
+PATCH  /api/admin/rooms/:id             partial update (admin)
+DELETE /api/admin/rooms/:id             delete (admin)
+POST   /api/admin/equipment             create an equipment type (admin)
 POST   /api/bookings                    single or recurring
 GET    /api/bookings                    caller's own bookings
 GET    /api/bookings/:id
@@ -96,6 +101,11 @@ DELETE /api/bookings/:id                cancel one occurrence
 DELETE /api/booking-series/:id          cancel the remaining series
 GET    /api/admin/utilisation           roomId?, from, to → hours booked vs available
 ```
+
+`withRoute(handler, { role: 'ADMIN' })` gates the four admin room/equipment routes and
+`/api/admin/utilisation` — it resolves the session via the same `requireUser()` every other
+authenticated route uses, then additionally checks `user.role`, so there's no separate
+role-lookup path to keep in sync.
 
 - Filtering, sorting and pagination are query parameters parsed by zod, then pushed into SQL.
   Never fetch everything and filter in JavaScript.

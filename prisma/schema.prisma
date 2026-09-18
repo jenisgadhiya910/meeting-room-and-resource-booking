@@ -28,7 +28,9 @@ model User {
 
 model Room {
   id       String  @id @default(uuid()) @db.Uuid
-  name     String
+  // Admin-managed catalogue entry: unique so two admin-created rooms can't
+  // silently collide under the same name.
+  name     String  @unique
   location String
   capacity Int
   active   Boolean @default(true)
@@ -67,9 +69,11 @@ model RoomEquipment {
 }
 
 model BookingSeries {
-  id     String @id @default(uuid()) @db.Uuid
-  roomId String @db.Uuid
-  userId String @db.Uuid
+  id     String  @id @default(uuid()) @db.Uuid
+  // Nullable: a room can be deleted once it has no active/future bookings,
+  // even if it has past series — see Booking.roomId for the full rationale.
+  roomId String? @db.Uuid
+  userId String  @db.Uuid
 
   // 0 = Sunday .. 6 = Saturday, matching JS Date#getDay().
   weekday Int
@@ -88,7 +92,7 @@ model BookingSeries {
 
   createdAt DateTime @default(now()) @db.Timestamptz()
 
-  room     Room      @relation(fields: [roomId], references: [id])
+  room     Room?     @relation(fields: [roomId], references: [id], onDelete: SetNull)
   user     User      @relation(fields: [userId], references: [id])
   bookings Booking[]
 
@@ -103,9 +107,13 @@ enum BookingStatus {
 }
 
 model Booking {
-  id       String @id @default(uuid()) @db.Uuid
-  roomId   String @db.Uuid
-  userId   String @db.Uuid
+  id       String  @id @default(uuid()) @db.Uuid
+  // Nullable: rooms can be deleted (once they have no active/future
+  // bookings), which sets this null on their past bookings rather than
+  // being blocked by a foreign key forever. Display never needs a live
+  // room this way — see roomSnapshot.
+  roomId   String? @db.Uuid
+  userId   String  @db.Uuid
   seriesId String? @db.Uuid
 
   // Half-open [startsAt, endsAt): a booking ending at 11:00 and one starting at
@@ -119,7 +127,14 @@ model Booking {
   createdAt   DateTime      @default(now()) @db.Timestamptz()
   cancelledAt DateTime?     @db.Timestamptz()
 
-  room   Room           @relation(fields: [roomId], references: [id])
+  // Room name/location/capacity/equipment as they were at the moment of
+  // booking, captured once at creation time. A booking always displays
+  // this, never a live join to `room` — the room can be renamed or deleted
+  // afterwards (only once it has no active/future bookings left), and a
+  // past booking must still show what was actually true when it was made.
+  roomSnapshot Json
+
+  room   Room?          @relation(fields: [roomId], references: [id], onDelete: SetNull)
   user   User           @relation(fields: [userId], references: [id])
   series BookingSeries? @relation(fields: [seriesId], references: [id])
 
@@ -146,14 +161,18 @@ model AuditEvent {
   occurredAt DateTime    @default(now()) @db.Timestamptz()
   actorId    String      @db.Uuid
   action     AuditAction
-  roomId     String      @db.Uuid
+  // Nullable for the same reason as Booking.roomId: the audit trail must
+  // survive a room being deleted, never the other way around. Anything
+  // about the room worth preserving belongs in `payload`, captured at write
+  // time — never re-derived from the (possibly gone) live room later.
+  roomId     String?     @db.Uuid
   bookingId  String?     @db.Uuid
   outcome    String
   requestId  String?
   payload    Json?
 
   actor   User     @relation(fields: [actorId], references: [id])
-  room    Room     @relation(fields: [roomId], references: [id])
+  room    Room?    @relation(fields: [roomId], references: [id], onDelete: SetNull)
   booking Booking? @relation(fields: [bookingId], references: [id])
 
   @@index([actorId])
