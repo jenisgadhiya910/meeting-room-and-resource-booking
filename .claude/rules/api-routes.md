@@ -81,6 +81,16 @@ export const createBookingSchema = z
 Room existence is a foreign key in the database and a `NOT_FOUND` from the repository — do not
 issue an extra `findUnique` purely to pre-validate it.
 
+**The frontend imports the same `z.infer<>` input type for the request body it builds** —
+`import type { CreateRoomInput } from '@/server/modules/room/room.schema'`, then
+`const body: CreateRoomInput = { ... }` before calling `apiFetch`. This is a type-only import
+(safe under `verbatimModuleSyntax` even though the schema file itself has runtime code — only
+the type is pulled in, nothing of the module executes or bundles client-side), the same pattern
+already used for response shapes (`RoomSummary`, `SessionUser`). Without it, a renamed or
+retyped schema field silently drifts from what the form actually sends until someone hits the
+button and gets a confusing runtime `400` — with it, the same drift is a compile error. Do this
+for every form that POSTs/PATCHes a body, not just the ones that already happen to do it.
+
 ## Routes
 
 Design them REST-shaped and resource-first; the spec prescribes no particular set.
@@ -89,6 +99,7 @@ Design them REST-shaped and resource-first; the spec prescribes no particular se
 GET    /api/rooms                       filter by capacity + equipment
 GET    /api/rooms/availability          date, from, to, minCapacity, equipment[] → free rooms
 GET    /api/equipment                   the equipment catalogue (for filter UIs) — public
+GET    /api/admin/rooms                 every room, including inactive (admin management view)
 POST   /api/admin/rooms                 create a room (admin)
 PATCH  /api/admin/rooms/:id             partial update (admin)
 DELETE /api/admin/rooms/:id             delete (admin)

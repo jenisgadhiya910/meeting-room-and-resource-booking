@@ -6,6 +6,7 @@ import { useState } from 'react';
 import { apiFetch, ApiError } from '@/lib/api-client';
 
 import type { SessionUser } from '@/server/auth/session';
+import type { LoginInput } from '@/server/modules/auth/auth.schema';
 import type { FormEvent } from 'react';
 
 interface LoginResponse {
@@ -24,9 +25,10 @@ export function LoginForm() {
     setIsSubmitting(true);
 
     try {
+      const body: LoginInput = { email, password };
       await apiFetch<LoginResponse>('/api/auth/login', {
         method: 'POST',
-        body: { email, password },
+        body,
       });
       router.push('/');
       router.refresh();

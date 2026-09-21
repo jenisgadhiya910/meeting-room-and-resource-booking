@@ -146,7 +146,7 @@ Build an admin page in src/app/(app)/admin/ for managing rooms and equipment:
 through the UI, confirm changes show up in room search; log in as the regular seeded user and
 confirm the admin page is inaccessible.
 
-- [ ] Done
+- [x] Done
 
 ## Phase 7 — Room catalogue & availability search (backend)
 
@@ -189,7 +189,50 @@ results match what curl showed in Phase 7.
 
 - [x] Done
 
-## Phase 9 — Booking creation (backend, the core feature)
+## Phase 9 — Sorting for room listings & search results (backend)
+
+**Learn:** keyset (cursor) pagination with a caller-selectable sort key, not just a fixed id
+order — the "sorting" half of the course's "Pagination, sorting and filtering" module, which
+Phase 7 didn't cover.
+
+```
+Extend room listing and availability search per .claude/rules/api-routes.md and
+.claude/rules/prisma-postgres.md:
+- Add `sort` (`name` | `capacity`) and `order` (`asc` | `desc`) to paginationSchema in
+  room.schema.ts, default `sort=name`, `order=asc`
+- Make the cursor composite: encode the sort field's value plus the room id, so pagination
+  stays stable once two rooms tie on the sort field (e.g. same capacity) — an id-only cursor
+  silently skips or repeats rows the moment that happens
+- Apply the same sort/cursor logic to listRooms, listAllRoomsForAdmin and
+  searchAvailableRooms in room.repository.ts — one shared helper, not three copies
+- Add a composite index covering the new orderBy column plus id, and say in the migration
+  comment which query it serves
+Explain why an id-only cursor breaks once you sort by a non-unique column, and show me the
+EXPLAIN plan using the new index.
+```
+
+**Verify:** curl the room list sorted by capacity descending across two pages where several
+rooms share a capacity; confirm no room is skipped or repeated at the page boundary.
+
+- [ ] Done
+
+## Phase 10 — Frontend: sort controls
+
+**Learn:** wiring a sort control into an existing filter form without losing pagination state.
+
+```
+Add sort controls to the room search page from Phase 8:
+- A sort-by select (name / capacity) and a direction toggle next to the existing filters
+- Changing sort resets pagination to the first page
+- Persist the chosen sort in the URL query string so a reload or shared link keeps it
+```
+
+**Verify:** sort by capacity descending in the browser and confirm the order matches what curl
+showed in Phase 9.
+
+- [ ] Done
+
+## Phase 11 — Booking creation (backend, the core feature)
 
 **Learn:** transactions, translating a Postgres SQLSTATE into an API error.
 
@@ -211,7 +254,7 @@ No recurring series yet. Show me the exact sequence when the exclusion constrain
 
 - [ ] Done
 
-## Phase 10 — Frontend: booking
+## Phase 12 — Frontend: booking
 
 **Learn:** optimistic vs. confirmed UI, surfacing a specific 409 instead of a generic error.
 
@@ -228,7 +271,7 @@ Add booking to the search results from Phase 8:
 
 - [ ] Done
 
-## Phase 11 — Concurrency verification script (the headline demo)
+## Phase 13 — Concurrency verification script (the headline demo)
 
 **Learn:** what "genuinely simultaneous" means, `Promise.all` races.
 
@@ -240,12 +283,12 @@ times in a row and explain why a single passing run isn't sufficient evidence.
 ```
 
 **Verify:** `yarn verify:concurrency` passes repeatedly, including back-to-back runs. As a bonus
-now that the booking UI exists (Phase 10), open two browser tabs and try to book the same slot
+now that the booking UI exists (Phase 12), open two browser tabs and try to book the same slot
 from both to see the 409 surface in the UI — but the script, not the tabs, is the real evidence.
 
 - [ ] Done
 
-## Phase 12 — Cancel, shorten & ownership (backend)
+## Phase 14 — Cancel, shorten & ownership (backend)
 
 **Learn:** authorization-in-service-layer, time-based business rules.
 
@@ -264,7 +307,7 @@ immediately.
 
 - [ ] Done
 
-## Phase 13 — Frontend: cancel & shorten (My bookings)
+## Phase 15 — Frontend: cancel & shorten (My bookings)
 
 **Learn:** rendering owned resources, PATCH/DELETE from the client, keeping the list in sync
 after a mutation.
@@ -283,7 +326,7 @@ page from Phase 8; try to shorten an already-ended booking and see the clear err
 
 - [ ] Done
 
-## Phase 14 — Recurring bookings (backend)
+## Phase 16 — Recurring bookings (backend)
 
 **Learn:** materialized occurrences vs. one row per series, all-or-nothing transactions,
 DST-safe recurrence.
@@ -302,17 +345,17 @@ Implement recurring series per .claude/rules/booking-domain.md:
 
 - [ ] Done
 
-## Phase 15 — Frontend: recurring booking
+## Phase 17 — Frontend: recurring booking
 
 **Learn:** presenting an all-or-nothing conflict result in a form.
 
 ```
-Add a "recurring" option to the booking flow from Phase 10:
+Add a "recurring" option to the booking flow from Phase 12:
 - Weekday, time, and week-count fields on the booking form
 - Calls POST /api/bookings with the recurring payload
 - On rejection, show details.conflicts clearly (which dates/times clashed) and make it obvious
   nothing partial was booked
-- The series shows up in "My bookings" (Phase 13) as its individual occurrences
+- The series shows up in "My bookings" (Phase 15) as its individual occurrences
 ```
 
 **Verify:** create a recurring series that deliberately conflicts on one week, confirm the
@@ -321,7 +364,7 @@ bookings" and confirm the rest of the series is untouched.
 
 - [ ] Done
 
-## Phase 16 — Utilisation view (backend)
+## Phase 18 — Utilisation view (backend)
 
 **Learn:** aggregate SQL, `date_trunc`, admin-only routes, explaining a query plan.
 
@@ -338,7 +381,7 @@ Run EXPLAIN on the aggregate query and walk me through whether the index is bein
 
 - [ ] Done
 
-## Phase 17 — Frontend: admin utilisation
+## Phase 19 — Frontend: admin utilisation
 
 **Learn:** a simple aggregate dashboard, gating a page behind a role on both server and client.
 
@@ -356,7 +399,7 @@ as the regular seeded user and confirm the page is inaccessible.
 
 - [ ] Done
 
-## Phase 18 — Full containerization & final pass
+## Phase 20 — Full containerization & final pass
 
 **Learn:** multi-stage Docker builds, non-interactive migrations, the acceptance bar.
 

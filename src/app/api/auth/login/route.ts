@@ -1,4 +1,4 @@
-import { setSessionCookie } from '@/server/auth/session';
+import { sessionUserSchema, setSessionCookie } from '@/server/auth/session';
 import { RateLimitedError } from '@/server/http/errors';
 import { ok } from '@/server/http/response';
 import { withRoute } from '@/server/http/with-route';
@@ -17,7 +17,10 @@ export const POST = withRoute(
     const { token, user } = await login(body);
     await setSessionCookie(token);
 
-    return ok({ user });
+    // Re-parsed at the response boundary, not just trusted from the service:
+    // strips anything beyond id/email/role (e.g. passwordHash) even if a
+    // future bug ever attached it.
+    return ok({ user: sessionUserSchema.parse(user) });
   },
   { auth: 'optional' },
 );

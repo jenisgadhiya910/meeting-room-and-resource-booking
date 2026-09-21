@@ -3,8 +3,12 @@
 import { useEffect, useState } from 'react';
 
 import { apiFetch } from '@/lib/api-client';
+import { inputClassName, primaryButtonClassName } from '@/lib/ui';
 
-import type { RoomSummary } from '@/server/modules/room/room.repository';
+import type {
+  EquipmentSummary,
+  RoomSummary,
+} from '@/server/modules/room/room.repository';
 import type { FormEvent } from 'react';
 
 interface RoomListResponse {
@@ -12,18 +16,10 @@ interface RoomListResponse {
   meta: { nextCursor: string | null };
 }
 
-interface EquipmentOption {
-  key: string;
-  label: string;
-}
-
 interface EquipmentListResponse {
-  data: EquipmentOption[];
+  data: EquipmentSummary[];
   meta: { nextCursor: string | null };
 }
-
-const inputClassName =
-  'w-full rounded-md border border-gray-300 px-3 py-2 text-sm dark:border-gray-700 dark:bg-gray-900';
 
 function todayLocalDate(): string {
   const now = new Date();
@@ -41,7 +37,7 @@ function toIsoDateTime(date: string, time: string): string {
 }
 
 export function RoomSearch() {
-  const [equipmentOptions, setEquipmentOptions] = useState<EquipmentOption[]>(
+  const [equipmentOptions, setEquipmentOptions] = useState<EquipmentSummary[]>(
     [],
   );
 
@@ -212,7 +208,7 @@ export function RoomSearch() {
           <button
             type="submit"
             disabled={isSearching}
-            className="rounded-md bg-black px-4 py-2 text-sm font-medium text-white disabled:opacity-50 dark:bg-white dark:text-black"
+            className={primaryButtonClassName}
           >
             {isSearching ? 'Searching…' : 'Search'}
           </button>

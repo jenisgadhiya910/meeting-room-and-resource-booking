@@ -113,5 +113,10 @@ below for the update/delete guard and why bookings never show live room data.
   rule above, this makes no difference for an active/future booking (the room can't have
   changed since), but it's what makes a past booking keep showing what was actually true when
   it was made — even after the room is later renamed, recapacitated, or deleted entirely.
+- **REST over tRPC, and no Server Actions.** This POC uses Route Handlers and REST throughout
+  instead, so there's one input boundary per operation, not two.
+- **No Jest/Vitest/Playwright.** `scripts/verify-concurrency.ts` and `scripts/verify-ownership.ts`
+  are the runnable evidence in place of an automated test suite — a deliberate substitution,
+  documented in `CLAUDE.md`.
 - Still to resolve in later phases: shortening an already-started booking, the all-or-nothing
   recurring series rule, and the bookable window used by the utilisation view.

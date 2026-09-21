@@ -6,11 +6,19 @@ import { env } from '@/server/env';
 import { Role } from '@/generated/prisma/enums';
 import { UnauthenticatedError } from '@/server/http/errors';
 
-export interface SessionUser {
-  id: string;
-  email: string;
-  role: Role;
-}
+// The canonical shape of a signed-in user, everywhere: the session, JWT
+// verification, and — parsed again, right before responding — every route
+// that sends a user back to the client. Parsing strips unknown keys by
+// default, so if a future bug ever passed a raw User row (with
+// passwordHash) through instead of this shape, the parse silently drops it
+// rather than shipping it to the browser.
+export const sessionUserSchema = z.object({
+  id: z.uuid(),
+  email: z.email(),
+  role: z.enum(Role),
+});
+
+export type SessionUser = z.infer<typeof sessionUserSchema>;
 
 const SESSION_COOKIE_NAME = 'session';
 // 7 days: long enough that a session survives a review sitting, short enough
@@ -21,11 +29,12 @@ const JWT_ALG = 'HS256';
 
 const secretKey = new TextEncoder().encode(env.SESSION_SECRET);
 
-const sessionPayloadSchema = z.object({
-  sub: z.uuid(),
-  email: z.email(),
-  role: z.enum(Role),
-});
+// Same as sessionUserSchema, but keyed by the JWT's registered `sub` claim
+// instead of `id` — that's the one field that genuinely differs between a
+// token payload and our own SessionUser shape.
+const sessionPayloadSchema = sessionUserSchema
+  .omit({ id: true })
+  .extend({ sub: z.uuid() });
 
 export async function createSessionToken(user: SessionUser): Promise<string> {
   return new SignJWT({ email: user.email, role: user.role })

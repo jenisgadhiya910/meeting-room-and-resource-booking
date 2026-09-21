@@ -2,14 +2,30 @@ import { prisma } from '@/server/db/prisma';
 import { ValidationError } from '@/server/http/errors';
 
 import type { Prisma } from '@/generated/prisma/client';
-import type { UpdateRoomInput } from './room.schema';
+import type {
+  AvailabilityQuery,
+  CreateEquipmentInput,
+  CreateRoomInput,
+  ListRoomsQuery,
+  PaginationQuery,
+  UpdateRoomInput,
+} from './room.schema';
+
+export interface EquipmentSummary {
+  key: string;
+  label: string;
+}
 
 export interface RoomSummary {
   id: string;
   name: string;
   location: string;
   capacity: number;
-  equipment: { key: string; label: string }[];
+  equipment: EquipmentSummary[];
+}
+
+export interface AdminRoomSummary extends RoomSummary {
+  active: boolean;
 }
 
 export interface RoomPage {
@@ -17,17 +33,18 @@ export interface RoomPage {
   nextCursor: string | null;
 }
 
-interface BaseParams {
-  minCapacity?: number | undefined;
-  equipmentKeys: string[];
-  limit: number;
-  cursor?: string | undefined;
+export interface AdminRoomPage {
+  items: AdminRoomSummary[];
+  nextCursor: string | null;
 }
 
-export interface AvailabilityParams extends BaseParams {
+// The wire-format ISO strings become real Date objects at this boundary —
+// everything else about the query is exactly what the schema already
+// validated, so it's derived rather than re-declared.
+export type AvailabilityParams = Omit<AvailabilityQuery, 'from' | 'to'> & {
   from: Date;
   to: Date;
-}
+};
 
 const roomSelect = {
   id: true,
@@ -47,6 +64,21 @@ function toSummary(room: RoomRow): RoomSummary {
     capacity: room.capacity,
     equipment: room.equipment.map((link) => link.equipment),
   };
+}
+
+const adminRoomSelect = {
+  id: true,
+  name: true,
+  location: true,
+  capacity: true,
+  active: true,
+  equipment: { select: { equipment: { select: { key: true, label: true } } } },
+} satisfies Prisma.RoomSelect;
+
+type AdminRoomRow = Prisma.RoomGetPayload<{ select: typeof adminRoomSelect }>;
+
+function toAdminSummary(room: AdminRoomRow): AdminRoomSummary {
+  return { ...toSummary(room), active: room.active };
 }
 
 // Fetch one extra row to know whether there's a next page, then slice it off.
@@ -72,12 +104,12 @@ function buildEquipmentFilter(
   }));
 }
 
-export async function listRooms(params: BaseParams): Promise<RoomPage> {
-  const { minCapacity, equipmentKeys, limit, cursor } = params;
+export async function listRooms(query: ListRoomsQuery): Promise<RoomPage> {
+  const { minCapacity, equipment, limit, cursor } = query;
 
   const where: Prisma.RoomWhereInput = {
     active: true,
-    AND: buildEquipmentFilter(equipmentKeys),
+    AND: buildEquipmentFilter(equipment),
     ...(minCapacity !== undefined ? { capacity: { gte: minCapacity } } : {}),
   };
 
@@ -117,16 +149,7 @@ async function resolveEquipmentIds(
   return rows.map((row) => row.id);
 }
 
-export interface CreateRoomParams {
-  name: string;
-  location: string;
-  capacity: number;
-  equipmentKeys: string[];
-}
-
-export async function createRoom(
-  input: CreateRoomParams,
-): Promise<RoomSummary> {
+export async function createRoom(input: CreateRoomInput): Promise<RoomSummary> {
   const equipmentIds = await resolveEquipmentIds(prisma, input.equipmentKeys);
 
   const room = await prisma.room.create({
@@ -186,6 +209,23 @@ export async function deleteRoom(id: string): Promise<void> {
   await prisma.room.delete({ where: { id } });
 }
 
+// Admin management view: every room regardless of `active`, unlike the
+// public catalogue (listRooms), which only ever shows bookable rooms.
+export async function listAllRoomsForAdmin(
+  query: PaginationQuery,
+): Promise<AdminRoomPage> {
+  const { limit, cursor } = query;
+
+  const rooms = await prisma.room.findMany({
+    select: adminRoomSelect,
+    orderBy: { id: 'asc' },
+    take: limit + 1,
+    ...(cursor !== undefined ? { cursor: { id: cursor }, skip: 1 } : {}),
+  });
+
+  return paginate(rooms.map(toAdminSummary), limit);
+}
+
 // "Active or future": any CONFIRMED booking that hasn't ended yet — covers
 // one already in progress (started, not yet ended) and one still upcoming.
 export async function hasActiveOrFutureBookings(
@@ -197,10 +237,9 @@ export async function hasActiveOrFutureBookings(
   return count > 0;
 }
 
-export async function createEquipment(input: {
-  key: string;
-  label: string;
-}): Promise<{ key: string; label: string }> {
+export async function createEquipment(
+  input: CreateEquipmentInput,
+): Promise<EquipmentSummary> {
   return prisma.equipment.create({
     data: input,
     select: { key: true, label: true },
@@ -208,15 +247,14 @@ export async function createEquipment(input: {
 }
 
 export interface EquipmentPage {
-  items: { key: string; label: string }[];
+  items: EquipmentSummary[];
   nextCursor: string | null;
 }
 
-export async function listEquipment(params: {
-  limit: number;
-  cursor?: string | undefined;
-}): Promise<EquipmentPage> {
-  const { limit, cursor } = params;
+export async function listEquipment(
+  query: PaginationQuery,
+): Promise<EquipmentPage> {
+  const { limit, cursor } = query;
 
   const rows = await prisma.equipment.findMany({
     select: { id: true, key: true, label: true },
@@ -235,11 +273,11 @@ export async function listEquipment(params: {
 export async function searchAvailableRooms(
   params: AvailabilityParams,
 ): Promise<RoomPage> {
-  const { minCapacity, equipmentKeys, limit, cursor, from, to } = params;
+  const { minCapacity, equipment, limit, cursor, from, to } = params;
 
   const where: Prisma.RoomWhereInput = {
     active: true,
-    AND: buildEquipmentFilter(equipmentKeys),
+    AND: buildEquipmentFilter(equipment),
     ...(minCapacity !== undefined ? { capacity: { gte: minCapacity } } : {}),
     // Half-open [startsAt, endsAt) ranges overlap iff startsAt < to AND
     // endsAt > from — the same predicate the bookings_no_overlap exclusion

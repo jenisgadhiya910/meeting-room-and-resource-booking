@@ -13,13 +13,20 @@ import {
   createRoom as createRoomRepo,
   deleteRoom as deleteRoomRepo,
   hasActiveOrFutureBookings,
+  listAllRoomsForAdmin as listAllRoomsForAdminRepo,
   listEquipment as listEquipmentRepo,
   listRooms as listRoomsRepo,
   searchAvailableRooms as searchAvailableRoomsRepo,
   updateRoom as updateRoomRepo,
 } from './room.repository';
 
-import type { EquipmentPage, RoomPage, RoomSummary } from './room.repository';
+import type {
+  AdminRoomPage,
+  EquipmentPage,
+  EquipmentSummary,
+  RoomPage,
+  RoomSummary,
+} from './room.repository';
 import type {
   AvailabilityQuery,
   CreateEquipmentInput,
@@ -30,22 +37,16 @@ import type {
 } from './room.schema';
 
 export async function listRooms(query: ListRoomsQuery): Promise<RoomPage> {
-  return listRoomsRepo({
-    minCapacity: query.minCapacity,
-    equipmentKeys: query.equipment,
-    limit: query.limit,
-    cursor: query.cursor,
-  });
+  return listRoomsRepo(query);
 }
 
 export async function searchAvailableRooms(
   query: AvailabilityQuery,
 ): Promise<RoomPage> {
+  // The only real transformation at this boundary: wire-format ISO strings
+  // become the Date objects the repository's Prisma comparisons need.
   return searchAvailableRoomsRepo({
-    minCapacity: query.minCapacity,
-    equipmentKeys: query.equipment,
-    limit: query.limit,
-    cursor: query.cursor,
+    ...query,
     from: new Date(query.from),
     to: new Date(query.to),
   });
@@ -123,9 +124,15 @@ export async function deleteRoom(roomId: string): Promise<void> {
   }
 }
 
+export async function listAllRoomsForAdmin(
+  query: PaginationQuery,
+): Promise<AdminRoomPage> {
+  return listAllRoomsForAdminRepo(query);
+}
+
 export async function createEquipment(
   input: CreateEquipmentInput,
-): Promise<{ key: string; label: string }> {
+): Promise<EquipmentSummary> {
   try {
     return await createEquipmentRepo(input);
   } catch (error: unknown) {
@@ -138,5 +145,5 @@ export async function createEquipment(
 export async function listEquipment(
   query: PaginationQuery,
 ): Promise<EquipmentPage> {
-  return listEquipmentRepo({ limit: query.limit, cursor: query.cursor });
+  return listEquipmentRepo(query);
 }
