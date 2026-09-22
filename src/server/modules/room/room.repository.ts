@@ -1,3 +1,5 @@
+import { z } from 'zod';
+
 import { prisma } from '@/server/db/prisma';
 import { ValidationError } from '@/server/http/errors';
 
@@ -8,6 +10,9 @@ import type {
   CreateRoomInput,
   ListRoomsQuery,
   PaginationQuery,
+  RoomListPagination,
+  RoomSort,
+  SortOrder,
   UpdateRoomInput,
 } from './room.schema';
 
@@ -82,8 +87,9 @@ function toAdminSummary(room: AdminRoomRow): AdminRoomSummary {
 }
 
 // Fetch one extra row to know whether there's a next page, then slice it off.
-// Shared by every id-cursored listing (rooms, equipment).
-function paginate<T extends { id: string }>(
+// Used by the one listing (equipment) that isn't caller-sortable and can
+// still cursor on its bare id. Room listings use paginateRooms below.
+function paginateById<T extends { id: string }>(
   rows: T[],
   limit: number,
 ): { items: T[]; nextCursor: string | null } {
@@ -91,6 +97,100 @@ function paginate<T extends { id: string }>(
   const items = rows.slice(0, limit);
   const last = items.at(-1);
   return { items, nextCursor: last ? last.id : null };
+}
+
+// The opaque cursor room listings hand back to the client. It carries the
+// sort column's own value, not just `id` — resuming an id-only cursor after
+// `ORDER BY capacity` would have no idea where in the capacity ordering to
+// pick back up. `sort` rides along too so a stale cursor from a different
+// sort choice fails loudly (VALIDATION_FAILED) instead of being silently
+// misinterpreted as the wrong type.
+const roomCursorPayloadSchema = z.discriminatedUnion('sort', [
+  z.object({ sort: z.literal('name'), value: z.string(), id: z.uuid() }),
+  z.object({ sort: z.literal('capacity'), value: z.number(), id: z.uuid() }),
+]);
+
+type RoomCursorPayload = z.infer<typeof roomCursorPayloadSchema>;
+
+function encodeRoomCursor(payload: RoomCursorPayload): string {
+  return Buffer.from(JSON.stringify(payload)).toString('base64url');
+}
+
+function decodeRoomCursor(
+  raw: string,
+  expectedSort: RoomSort,
+): RoomCursorPayload {
+  let json: unknown;
+  try {
+    json = JSON.parse(Buffer.from(raw, 'base64url').toString('utf8'));
+  } catch {
+    throw new ValidationError('Invalid cursor');
+  }
+
+  const parsed = roomCursorPayloadSchema.safeParse(json);
+  if (!parsed.success || parsed.data.sort !== expectedSort) {
+    throw new ValidationError('Invalid cursor');
+  }
+  return parsed.data;
+}
+
+// The tiebreaker (`id`) always sorts the same direction as the chosen
+// column, never a fixed `asc` — that's what lets a single compound-unique
+// index (see schema.prisma) serve both directions: `capacity asc, id asc`
+// is a forward scan of the (capacity, id) index, `capacity desc, id desc`
+// is a backward scan of that exact same index. Mixing directions (e.g.
+// `capacity desc, id asc`) would need a second, differently-ordered index
+// for no real benefit at this POC's data volume.
+function buildRoomOrderAndCursor(
+  sort: RoomSort,
+  order: SortOrder,
+  cursor: string | undefined,
+): {
+  orderBy: Prisma.RoomOrderByWithRelationInput[];
+  cursor?: Prisma.RoomWhereUniqueInput;
+  skip?: number;
+} {
+  const orderBy: Prisma.RoomOrderByWithRelationInput[] =
+    sort === 'name'
+      ? [{ name: order }, { id: order }]
+      : [{ capacity: order }, { id: order }];
+
+  if (cursor === undefined) return { orderBy };
+
+  const decoded = decodeRoomCursor(cursor, sort);
+  return {
+    orderBy,
+    cursor:
+      decoded.sort === 'name'
+        ? { name_id: { name: decoded.value, id: decoded.id } }
+        : { capacity_id: { capacity: decoded.value, id: decoded.id } },
+    skip: 1,
+  };
+}
+
+// Same "fetch one extra, slice it off" shape as paginateById, but the
+// cursor it hands back encodes whichever column the caller sorted on.
+function paginateRooms<
+  T extends { id: string; name: string; capacity: number },
+>(
+  rows: T[],
+  limit: number,
+  sort: RoomSort,
+): { items: T[]; nextCursor: string | null } {
+  if (rows.length <= limit) return { items: rows, nextCursor: null };
+  const items = rows.slice(0, limit);
+  const last = items.at(-1);
+  if (!last) return { items, nextCursor: null };
+
+  const nextCursor =
+    sort === 'name'
+      ? encodeRoomCursor({ sort: 'name', value: last.name, id: last.id })
+      : encodeRoomCursor({
+          sort: 'capacity',
+          value: last.capacity,
+          id: last.id,
+        });
+  return { items, nextCursor };
 }
 
 // AND semantics: a room must have EVERY requested key, not just one of them
@@ -105,7 +205,7 @@ function buildEquipmentFilter(
 }
 
 export async function listRooms(query: ListRoomsQuery): Promise<RoomPage> {
-  const { minCapacity, equipment, limit, cursor } = query;
+  const { minCapacity, equipment, limit, cursor, sort, order } = query;
 
   const where: Prisma.RoomWhereInput = {
     active: true,
@@ -113,15 +213,21 @@ export async function listRooms(query: ListRoomsQuery): Promise<RoomPage> {
     ...(minCapacity !== undefined ? { capacity: { gte: minCapacity } } : {}),
   };
 
+  const {
+    orderBy,
+    cursor: cursorArg,
+    skip,
+  } = buildRoomOrderAndCursor(sort, order, cursor);
+
   const rooms = await prisma.room.findMany({
     where,
     select: roomSelect,
-    orderBy: { id: 'asc' },
+    orderBy,
     take: limit + 1,
-    ...(cursor !== undefined ? { cursor: { id: cursor }, skip: 1 } : {}),
+    ...(cursorArg !== undefined ? { cursor: cursorArg, skip } : {}),
   });
 
-  return paginate(rooms.map(toSummary), limit);
+  return paginateRooms(rooms.map(toSummary), limit, sort);
 }
 
 // Shared by createRoom/updateRoom: turns equipment keys into ids, rejecting
@@ -212,18 +318,24 @@ export async function deleteRoom(id: string): Promise<void> {
 // Admin management view: every room regardless of `active`, unlike the
 // public catalogue (listRooms), which only ever shows bookable rooms.
 export async function listAllRoomsForAdmin(
-  query: PaginationQuery,
+  query: RoomListPagination,
 ): Promise<AdminRoomPage> {
-  const { limit, cursor } = query;
+  const { limit, cursor, sort, order } = query;
+
+  const {
+    orderBy,
+    cursor: cursorArg,
+    skip,
+  } = buildRoomOrderAndCursor(sort, order, cursor);
 
   const rooms = await prisma.room.findMany({
     select: adminRoomSelect,
-    orderBy: { id: 'asc' },
+    orderBy,
     take: limit + 1,
-    ...(cursor !== undefined ? { cursor: { id: cursor }, skip: 1 } : {}),
+    ...(cursorArg !== undefined ? { cursor: cursorArg, skip } : {}),
   });
 
-  return paginate(rooms.map(toAdminSummary), limit);
+  return paginateRooms(rooms.map(toAdminSummary), limit, sort);
 }
 
 // "Active or future": any CONFIRMED booking that hasn't ended yet — covers
@@ -263,7 +375,7 @@ export async function listEquipment(
     ...(cursor !== undefined ? { cursor: { id: cursor }, skip: 1 } : {}),
   });
 
-  const { items, nextCursor } = paginate(rows, limit);
+  const { items, nextCursor } = paginateById(rows, limit);
   return {
     items: items.map((row) => ({ key: row.key, label: row.label })),
     nextCursor,
@@ -273,7 +385,8 @@ export async function listEquipment(
 export async function searchAvailableRooms(
   params: AvailabilityParams,
 ): Promise<RoomPage> {
-  const { minCapacity, equipment, limit, cursor, from, to } = params;
+  const { minCapacity, equipment, limit, cursor, sort, order, from, to } =
+    params;
 
   const where: Prisma.RoomWhereInput = {
     active: true,
@@ -292,13 +405,19 @@ export async function searchAvailableRooms(
     },
   };
 
+  const {
+    orderBy,
+    cursor: cursorArg,
+    skip,
+  } = buildRoomOrderAndCursor(sort, order, cursor);
+
   const rooms = await prisma.room.findMany({
     where,
     select: roomSelect,
-    orderBy: { id: 'asc' },
+    orderBy,
     take: limit + 1,
-    ...(cursor !== undefined ? { cursor: { id: cursor }, skip: 1 } : {}),
+    ...(cursorArg !== undefined ? { cursor: cursorArg, skip } : {}),
   });
 
-  return paginate(rooms.map(toSummary), limit);
+  return paginateRooms(rooms.map(toSummary), limit, sort);
 }

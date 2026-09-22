@@ -33,6 +33,7 @@ import type {
   CreateRoomInput,
   ListRoomsQuery,
   PaginationQuery,
+  RoomListPagination,
   UpdateRoomInput,
 } from './room.schema';
 
@@ -125,7 +126,7 @@ export async function deleteRoom(roomId: string): Promise<void> {
 }
 
 export async function listAllRoomsForAdmin(
-  query: PaginationQuery,
+  query: RoomListPagination,
 ): Promise<AdminRoomPage> {
   return listAllRoomsForAdminRepo(query);
 }

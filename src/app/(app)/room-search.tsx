@@ -1,15 +1,25 @@
 'use client';
 
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 
 import { apiFetch } from '@/lib/api-client';
-import { inputClassName, primaryButtonClassName } from '@/lib/ui';
+import {
+  inputClassName,
+  primaryButtonClassName,
+  secondaryButtonClassName,
+} from '@/lib/ui';
+import {
+  roomSortSchema,
+  sortOrderSchema,
+} from '@/server/modules/room/room.schema';
 
 import type {
   EquipmentSummary,
   RoomSummary,
 } from '@/server/modules/room/room.repository';
-import type { FormEvent } from 'react';
+import type { RoomSort, SortOrder } from '@/server/modules/room/room.schema';
+import type { ChangeEvent, FormEvent } from 'react';
 
 interface RoomListResponse {
   data: RoomSummary[];
@@ -37,6 +47,10 @@ function toIsoDateTime(date: string, time: string): string {
 }
 
 export function RoomSearch() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
   const [equipmentOptions, setEquipmentOptions] = useState<EquipmentSummary[]>(
     [],
   );
@@ -46,6 +60,17 @@ export function RoomSearch() {
   const [endTime, setEndTime] = useState('10:00');
   const [minCapacity, setMinCapacity] = useState('');
   const [selectedEquipment, setSelectedEquipment] = useState<string[]>([]);
+
+  // Seeded from the URL so a reload or a shared link keeps the chosen sort —
+  // an id-only page like this one has no other state worth round-tripping.
+  const [sort, setSort] = useState<RoomSort>(() => {
+    const parsed = roomSortSchema.safeParse(searchParams.get('sort'));
+    return parsed.success ? parsed.data : 'name';
+  });
+  const [order, setOrder] = useState<SortOrder>(() => {
+    const parsed = sortOrderSchema.safeParse(searchParams.get('order'));
+    return parsed.success ? parsed.data : 'asc';
+  });
 
   const [results, setResults] = useState<RoomSummary[] | null>(null);
   const [searchError, setSearchError] = useState<string | null>(null);
@@ -77,7 +102,17 @@ export function RoomSearch() {
     );
   }
 
-  async function search() {
+  // `overrides` lets a sort/order change search immediately with the new
+  // value rather than the state from before that change's re-render — the
+  // search always asks the API for a cursor-less first page, so there's no
+  // stale pagination cursor to carry across a sort change either.
+  async function search(overrides?: {
+    sort?: RoomSort;
+    order?: SortOrder;
+  }): Promise<void> {
+    const effectiveSort = overrides?.sort ?? sort;
+    const effectiveOrder = overrides?.order ?? order;
+
     setSearchError(null);
     setIsSearching(true);
     setResults(null);
@@ -89,7 +124,12 @@ export function RoomSearch() {
         throw new Error('End time must be after start time.');
       }
 
-      const params = new URLSearchParams({ from, to });
+      const params = new URLSearchParams({
+        from,
+        to,
+        sort: effectiveSort,
+        order: effectiveOrder,
+      });
       if (minCapacity) params.set('minCapacity', minCapacity);
       for (const key of selectedEquipment) params.append('equipment', key);
 
@@ -104,6 +144,31 @@ export function RoomSearch() {
     } finally {
       setIsSearching(false);
     }
+  }
+
+  function updateSortInUrl(nextSort: RoomSort, nextOrder: SortOrder): void {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set('sort', nextSort);
+    params.set('order', nextOrder);
+    router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+  }
+
+  function handleSortChange(event: ChangeEvent<HTMLSelectElement>): void {
+    const parsed = roomSortSchema.safeParse(event.target.value);
+    if (!parsed.success) return;
+
+    setSort(parsed.data);
+    updateSortInUrl(parsed.data, order);
+    // Only re-run a search that's already happened — before that, the new
+    // sort just takes effect on the next explicit search.
+    if (results !== null) void search({ sort: parsed.data });
+  }
+
+  function handleOrderToggle(): void {
+    const nextOrder: SortOrder = order === 'asc' ? 'desc' : 'asc';
+    setOrder(nextOrder);
+    updateSortInUrl(sort, nextOrder);
+    if (results !== null) void search({ order: nextOrder });
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>): void {
@@ -203,6 +268,32 @@ export function RoomSearch() {
             </div>
           </div>
         ) : null}
+
+        <div className="flex flex-wrap items-end gap-4 sm:col-span-2">
+          <div className="space-y-1">
+            <label htmlFor="sort" className="block text-sm font-medium">
+              Sort by
+            </label>
+            <select
+              id="sort"
+              value={sort}
+              onChange={handleSortChange}
+              className={inputClassName}
+            >
+              <option value="name">Name</option>
+              <option value="capacity">Capacity</option>
+            </select>
+          </div>
+
+          <button
+            type="button"
+            onClick={handleOrderToggle}
+            className={secondaryButtonClassName}
+            aria-label={`Currently sorted ${order === 'asc' ? 'ascending' : 'descending'}. Click to sort ${order === 'asc' ? 'descending' : 'ascending'}.`}
+          >
+            {order === 'asc' ? 'Ascending ↑' : 'Descending ↓'}
+          </button>
+        </div>
 
         <div className="sm:col-span-2">
           <button

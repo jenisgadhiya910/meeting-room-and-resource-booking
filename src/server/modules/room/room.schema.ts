@@ -9,16 +9,36 @@ export const paginationSchema = z.object({
   cursor: z.uuid().optional(),
 });
 
+// Only these two columns have a composite-unique index pairing them with
+// `id` (see schema.prisma) — that index is what makes keyset pagination
+// over a caller-chosen column actually work, so the sortable set is
+// deliberately closed rather than "any Room field".
+export const roomSortSchema = z.enum(['name', 'capacity']);
+export const sortOrderSchema = z.enum(['asc', 'desc']);
+
+// Room listings paginate on an opaque cursor that encodes the sort column's
+// value plus the room id (room.repository.ts), not a bare room id — a plain
+// uuid cursor can't express "resume after capacity=6, id=...". This is its
+// own schema rather than an extension of paginationSchema above because
+// GET /api/equipment also uses paginationSchema and has no sortable column
+// of its own; folding sort/order into the shared base would leak a
+// room-specific concept into an unrelated resource.
+export const roomListPaginationSchema = paginationSchema.extend({
+  cursor: z.string().min(1).optional(),
+  sort: roomSortSchema.default('name'),
+  order: sortOrderSchema.default('asc'),
+});
+
 const roomFilterSchema = z.object({
   minCapacity: z.coerce.number().int().positive().optional(),
   equipment: z.array(z.string().min(1)).default([]),
 });
 
-export const listRoomsQuerySchema = paginationSchema.extend(
+export const listRoomsQuerySchema = roomListPaginationSchema.extend(
   roomFilterSchema.shape,
 );
 
-export const availabilityQuerySchema = paginationSchema
+export const availabilityQuerySchema = roomListPaginationSchema
   .extend(roomFilterSchema.shape)
   .extend({
     from: z.iso.datetime({ offset: true }),
@@ -29,6 +49,9 @@ export const availabilityQuerySchema = paginationSchema
     path: ['to'],
   });
 
+export type RoomSort = z.infer<typeof roomSortSchema>;
+export type SortOrder = z.infer<typeof sortOrderSchema>;
+export type RoomListPagination = z.infer<typeof roomListPaginationSchema>;
 export type ListRoomsQuery = z.infer<typeof listRoomsQuerySchema>;
 export type AvailabilityQuery = z.infer<typeof availabilityQuerySchema>;
 export type PaginationQuery = z.infer<typeof paginationSchema>;

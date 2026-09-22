@@ -214,7 +214,7 @@ EXPLAIN plan using the new index.
 **Verify:** curl the room list sorted by capacity descending across two pages where several
 rooms share a capacity; confirm no room is skipped or repeated at the page boundary.
 
-- [ ] Done
+- [x] Done
 
 ## Phase 10 — Frontend: sort controls
 
@@ -230,7 +230,7 @@ Add sort controls to the room search page from Phase 8:
 **Verify:** sort by capacity descending in the browser and confirm the order matches what curl
 showed in Phase 9.
 
-- [ ] Done
+- [x] Done
 
 ## Phase 11 — Booking creation (backend, the core feature)
 

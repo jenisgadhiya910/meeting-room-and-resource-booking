@@ -2,7 +2,7 @@ import { ok, created } from '@/server/http/response';
 import { withRoute } from '@/server/http/with-route';
 import {
   createRoomSchema,
-  paginationSchema,
+  roomListPaginationSchema,
 } from '@/server/modules/room/room.schema';
 import {
   createRoom,
@@ -13,7 +13,7 @@ import {
 // public GET /api/rooms catalogue.
 export const GET = withRoute(
   async ({ request }) => {
-    const query = paginationSchema.parse(
+    const query = roomListPaginationSchema.parse(
       Object.fromEntries(request.nextUrl.searchParams),
     );
     const { items, nextCursor } = await listAllRoomsForAdmin(query);

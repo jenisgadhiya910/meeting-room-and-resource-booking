@@ -40,6 +40,18 @@ model Room {
   bookingSeries BookingSeries[]
   auditEvents   AuditEvent[]
 
+  // Compound uniques, not plain indexes: keyset pagination over a
+  // caller-selected sort column needs a cursor that uniquely identifies a
+  // row, and `id` alone isn't part of the sort order. `name` is already
+  // unique on its own (see above), but the pagination code deliberately
+  // doesn't rely on that — it always pairs the sort column with `id`, the
+  // same shape for every sortable column, so a future change to the
+  // name-uniqueness business rule can't silently break pagination. Each
+  // compound unique also serves as the composite index GET /api/rooms,
+  // GET /api/rooms/availability and GET /api/admin/rooms need for their
+  // `ORDER BY <col>, id` + cursor `WHERE` — see room.repository.ts.
+  @@unique([name, id])
+  @@unique([capacity, id])
   @@map("rooms")
 }
 
