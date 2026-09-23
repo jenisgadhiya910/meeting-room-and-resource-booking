@@ -3,11 +3,40 @@
 :root {
   --background: #ffffff;
   --foreground: #171717;
+
+  /* shadcn/ui button tokens (src/components/ui/button.tsx), values matched
+     to the gray/red scale src/lib/ui.ts already uses by hand elsewhere
+     (border-gray-300, dark:border-gray-700, text-red-600, …) so the
+     Pagination component doesn't look like a different app bolted on. */
+  --primary: #111827;
+  --primary-foreground: #f9fafb;
+  --secondary: #f3f4f6;
+  --secondary-foreground: #111827;
+  --muted: #f3f4f6;
+  --muted-foreground: #6b7280;
+  --accent: #f3f4f6;
+  --accent-foreground: #111827;
+  --destructive: #dc2626;
+  --border: #d1d5db;
+  --input: #d1d5db;
+  --ring: #9ca3af;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
@@ -16,6 +45,19 @@
   :root {
     --background: #0a0a0a;
     --foreground: #ededed;
+
+    --primary: #f9fafb;
+    --primary-foreground: #111827;
+    --secondary: #1f2937;
+    --secondary-foreground: #f9fafb;
+    --muted: #1f2937;
+    --muted-foreground: #9ca3af;
+    --accent: #1f2937;
+    --accent-foreground: #f9fafb;
+    --destructive: #f87171;
+    --border: #374151;
+    --input: #374151;
+    --ring: #6b7280;
   }
 }
 

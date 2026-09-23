@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+
 import 'dotenv/config';
 
 import { argon2id, hash } from 'argon2';
@@ -18,6 +20,42 @@ const ROOM_IDS = {
   gamma: '375f5f22-c879-43aa-9453-ae4e09717507',
   delta: 'f5d708d0-c2f0-4940-9e8b-338cdc5b482e',
 } as const;
+
+// One hundred hardcoded UUIDs would be unreadable, so the bulk rooms below
+// (added to exercise keyset pagination — see room.repository.ts — with more
+// than one page of results) derive their id from a fixed namespace plus the
+// room's own name instead: a UUID v5 per RFC 4122 §4.3. Same name always
+// hashes to the same id, so re-running the seed still upserts rather than
+// duplicating, without hand-listing a hundred ids the way ROOM_IDS does for
+// the four named demo rooms.
+const BULK_ROOM_NAMESPACE = '6f6a6c1e-6b8b-4a0a-9c8a-9f6b8f6a2f10';
+const BULK_ROOM_COUNT = 100;
+
+function deterministicRoomId(namespace: string, name: string): string {
+  const namespaceBytes = Buffer.from(namespace.replaceAll('-', ''), 'hex');
+  const hash = createHash('sha1')
+    .update(namespaceBytes)
+    .update(name, 'utf8')
+    .digest();
+
+  // RFC 4122 version (5) and variant nibbles — required for zod's z.uuid()
+  // (and Postgres's uuid column) to accept the result as a well-formed UUID.
+  hash.writeUInt8((hash.readUInt8(6) & 0x0f) | 0x50, 6);
+  hash.writeUInt8((hash.readUInt8(8) & 0x3f) | 0x80, 8);
+
+  const hex = hash.subarray(0, 16).toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+// `noUncheckedIndexedAccess` makes `items[index % items.length]` come back
+// `T | undefined` even though the modulo guarantees an in-range index —
+// this narrows it back without a non-null assertion.
+function cyclic<T>(items: readonly T[], index: number): T {
+  const item = items[index % items.length];
+  if (item === undefined)
+    throw new Error('cyclic() called with an empty array');
+  return item;
+}
 
 async function main() {
   const passwordHash = await hash(DEMO_PASSWORD, { type: argon2id });
@@ -53,7 +91,7 @@ async function main() {
     }),
   ]);
 
-  const rooms = [
+  const namedRooms = [
     {
       id: ROOM_IDS.alpha,
       name: 'Alpha',
@@ -83,6 +121,31 @@ async function main() {
       equipment: [],
     },
   ];
+
+  // Capacities repeat on purpose — Phase 9's keyset cursor has to stay
+  // stable once several rooms tie on the sort column, and that only gets
+  // exercised if the seed data actually ties.
+  const bulkCapacities = [2, 4, 6, 8, 10, 12, 15, 20, 25, 30];
+  const bulkEquipmentCycle = [
+    [],
+    [whiteboard],
+    [projector, whiteboard],
+    [projector, videoConferencing, whiteboard],
+    [videoConferencing],
+  ];
+
+  const bulkRooms = Array.from({ length: BULK_ROOM_COUNT }, (_, index) => {
+    const name = `Bulk Room ${String(index + 1).padStart(3, '0')}`;
+    return {
+      id: deterministicRoomId(BULK_ROOM_NAMESPACE, name),
+      name,
+      location: `Floor ${(index % 10) + 1}`,
+      capacity: cyclic(bulkCapacities, index),
+      equipment: cyclic(bulkEquipmentCycle, index),
+    };
+  });
+
+  const rooms = [...namedRooms, ...bulkRooms];
 
   for (const room of rooms) {
     await prisma.$transaction(async (tx) => {
@@ -120,7 +183,9 @@ async function main() {
   console.log(
     `Seeded equipment: ${projector.key}, ${videoConferencing.key}, ${whiteboard.key}`,
   );
-  console.log(`Seeded rooms: ${rooms.map((room) => room.name).join(', ')}`);
+  console.log(
+    `Seeded rooms: ${namedRooms.length} named (${namedRooms.map((room) => room.name).join(', ')}) + ${bulkRooms.length} bulk`,
+  );
 }
 
 main()

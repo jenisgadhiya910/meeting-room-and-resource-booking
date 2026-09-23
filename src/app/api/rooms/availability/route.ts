@@ -12,8 +12,12 @@ export const GET = withRoute(
     const query = availabilityQuerySchema.parse(
       parseRoomQueryParams(request.nextUrl.searchParams),
     );
-    const { items, nextCursor } = await searchAvailableRooms(query);
-    return ok({ data: items, meta: { nextCursor } });
+    const { items, page, pageSize, totalItems, totalPages } =
+      await searchAvailableRooms(query);
+    return ok({
+      data: items,
+      meta: { page, pageSize, totalItems, totalPages },
+    });
   },
   { auth: 'optional' },
 );

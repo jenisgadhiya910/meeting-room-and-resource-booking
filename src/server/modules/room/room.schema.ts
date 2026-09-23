@@ -10,21 +10,24 @@ export const paginationSchema = z.object({
 });
 
 // Only these two columns have a composite-unique index pairing them with
-// `id` (see schema.prisma) — that index is what makes keyset pagination
-// over a caller-chosen column actually work, so the sortable set is
-// deliberately closed rather than "any Room field".
+// `id` (see schema.prisma) — originally that index backed a keyset cursor
+// (see git history / docs/roadmap.md Phase 9); it still backs the ORDER BY
+// below, so the sortable set stays deliberately closed rather than "any
+// Room field" even though pagination itself is offset-based now.
 export const roomSortSchema = z.enum(['name', 'capacity']);
 export const sortOrderSchema = z.enum(['asc', 'desc']);
 
-// Room listings paginate on an opaque cursor that encodes the sort column's
-// value plus the room id (room.repository.ts), not a bare room id — a plain
-// uuid cursor can't express "resume after capacity=6, id=...". This is its
-// own schema rather than an extension of paginationSchema above because
-// GET /api/equipment also uses paginationSchema and has no sortable column
-// of its own; folding sort/order into the shared base would leak a
-// room-specific concept into an unrelated resource.
-export const roomListPaginationSchema = paginationSchema.extend({
-  cursor: z.string().min(1).optional(),
+// Room listings paginate by page number, not a cursor: the UI needs "jump
+// straight to page 7", which a forward-only keyset cursor can't do without
+// walking every page in between. This is its own schema rather than an
+// extension of paginationSchema above because GET /api/equipment still
+// paginates by cursor (see room.repository.ts's listEquipment) and has no
+// sortable column of its own — folding page/sort into the shared base
+// would leak a room-specific, offset-specific concept into an unrelated
+// resource that doesn't use it.
+export const roomListPaginationSchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(200).default(10),
   sort: roomSortSchema.default('name'),
   order: sortOrderSchema.default('asc'),
 });

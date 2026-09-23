@@ -115,6 +115,16 @@ below for the update/delete guard and why bookings never show live room data.
   it was made — even after the room is later renamed, recapacitated, or deleted entirely.
 - **REST over tRPC, and no Server Actions.** This POC uses Route Handlers and REST throughout
   instead, so there's one input boundary per operation, not two.
+- **Room listings (`GET /api/rooms`, `/api/rooms/availability`, `/api/admin/rooms`) paginate by
+  page number, not a keyset cursor**, so the UI can jump straight to an arbitrary page with
+  shadcn's `Pagination` component — a page/pageSize/totalItems/totalPages response, backed by
+  `skip`/`take` plus a `count()` query. A forward-only cursor can't express "page 7" without
+  walking every page in between, so this supersedes the keyset cursor pagination built in
+  [Phase 9](./docs/roadmap.md) for the same endpoints — a deliberate trade for a room catalogue
+  this small and this rarely written to concurrently; it is not the pattern to reach for on a
+  large or fast-changing collection (bookings, if they were ever listed this way, would keep
+  keyset pagination). `GET /api/equipment` still paginates by cursor; it backs filter checkboxes
+  only, never a paged UI.
 - **No Jest/Vitest/Playwright.** `scripts/verify-concurrency.ts` and `scripts/verify-ownership.ts`
   are the runnable evidence in place of an automated test suite — a deliberate substitution,
   documented in `CLAUDE.md`.

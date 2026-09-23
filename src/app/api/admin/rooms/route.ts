@@ -16,8 +16,12 @@ export const GET = withRoute(
     const query = roomListPaginationSchema.parse(
       Object.fromEntries(request.nextUrl.searchParams),
     );
-    const { items, nextCursor } = await listAllRoomsForAdmin(query);
-    return ok({ data: items, meta: { nextCursor } });
+    const { items, page, pageSize, totalItems, totalPages } =
+      await listAllRoomsForAdmin(query);
+    return ok({
+      data: items,
+      meta: { page, pageSize, totalItems, totalPages },
+    });
   },
   { role: 'ADMIN' },
 );

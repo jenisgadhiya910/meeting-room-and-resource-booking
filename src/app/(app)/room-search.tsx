@@ -3,6 +3,7 @@
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 
+import { RoomPagination } from '@/components/room-pagination';
 import { apiFetch } from '@/lib/api-client';
 import {
   inputClassName,
@@ -21,15 +22,24 @@ import type {
 import type { RoomSort, SortOrder } from '@/server/modules/room/room.schema';
 import type { ChangeEvent, FormEvent } from 'react';
 
+interface RoomListMeta {
+  page: number;
+  pageSize: number;
+  totalItems: number;
+  totalPages: number;
+}
+
 interface RoomListResponse {
   data: RoomSummary[];
-  meta: { nextCursor: string | null };
+  meta: RoomListMeta;
 }
 
 interface EquipmentListResponse {
   data: EquipmentSummary[];
   meta: { nextCursor: string | null };
 }
+
+const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
 function todayLocalDate(): string {
   const now = new Date();
@@ -73,6 +83,10 @@ export function RoomSearch() {
   });
 
   const [results, setResults] = useState<RoomSummary[] | null>(null);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [totalItems, setTotalItems] = useState(0);
+  const [totalPages, setTotalPages] = useState(0);
   const [searchError, setSearchError] = useState<string | null>(null);
   const [isSearching, setIsSearching] = useState(false);
 
@@ -102,41 +116,52 @@ export function RoomSearch() {
     );
   }
 
-  // `overrides` lets a sort/order change search immediately with the new
-  // value rather than the state from before that change's re-render — the
-  // search always asks the API for a cursor-less first page, so there's no
-  // stale pagination cursor to carry across a sort change either.
+  // `overrides` lets a sort/order/page/pageSize change build the request
+  // with the new value immediately, rather than the state from before that
+  // change's re-render.
+  function buildAvailabilityParams(overrides?: {
+    sort?: RoomSort;
+    order?: SortOrder;
+    page?: number;
+    pageSize?: number;
+  }): URLSearchParams {
+    const from = toIsoDateTime(date, startTime);
+    const to = toIsoDateTime(date, endTime);
+    if (new Date(to) <= new Date(from)) {
+      throw new Error('End time must be after start time.');
+    }
+
+    const params = new URLSearchParams({
+      from,
+      to,
+      sort: overrides?.sort ?? sort,
+      order: overrides?.order ?? order,
+      page: String(overrides?.page ?? page),
+      pageSize: String(overrides?.pageSize ?? pageSize),
+    });
+    if (minCapacity) params.set('minCapacity', minCapacity);
+    for (const key of selectedEquipment) params.append('equipment', key);
+    return params;
+  }
+
   async function search(overrides?: {
     sort?: RoomSort;
     order?: SortOrder;
+    page?: number;
+    pageSize?: number;
   }): Promise<void> {
-    const effectiveSort = overrides?.sort ?? sort;
-    const effectiveOrder = overrides?.order ?? order;
-
     setSearchError(null);
     setIsSearching(true);
-    setResults(null);
 
     try {
-      const from = toIsoDateTime(date, startTime);
-      const to = toIsoDateTime(date, endTime);
-      if (new Date(to) <= new Date(from)) {
-        throw new Error('End time must be after start time.');
-      }
-
-      const params = new URLSearchParams({
-        from,
-        to,
-        sort: effectiveSort,
-        order: effectiveOrder,
-      });
-      if (minCapacity) params.set('minCapacity', minCapacity);
-      for (const key of selectedEquipment) params.append('equipment', key);
-
+      const params = buildAvailabilityParams(overrides);
       const response = await apiFetch<RoomListResponse>(
         `/api/rooms/availability?${params.toString()}`,
       );
       setResults(response.data);
+      setPage(response.meta.page);
+      setTotalItems(response.meta.totalItems);
+      setTotalPages(response.meta.totalPages);
     } catch (err: unknown) {
       setSearchError(
         err instanceof Error ? err.message : 'Something went wrong',
@@ -160,20 +185,32 @@ export function RoomSearch() {
     setSort(parsed.data);
     updateSortInUrl(parsed.data, order);
     // Only re-run a search that's already happened — before that, the new
-    // sort just takes effect on the next explicit search.
-    if (results !== null) void search({ sort: parsed.data });
+    // sort just takes effect on the next explicit search. A sort change
+    // always jumps back to page 1: page 6 of a "by name" search has no
+    // relationship to page 6 of a "by capacity" one.
+    if (results !== null) void search({ sort: parsed.data, page: 1 });
   }
 
   function handleOrderToggle(): void {
     const nextOrder: SortOrder = order === 'asc' ? 'desc' : 'asc';
     setOrder(nextOrder);
     updateSortInUrl(sort, nextOrder);
-    if (results !== null) void search({ order: nextOrder });
+    if (results !== null) void search({ order: nextOrder, page: 1 });
+  }
+
+  function handlePageSizeChange(event: ChangeEvent<HTMLSelectElement>): void {
+    const nextPageSize = Number(event.target.value);
+    setPageSize(nextPageSize);
+    if (results !== null) void search({ pageSize: nextPageSize, page: 1 });
+  }
+
+  function handlePageChange(nextPage: number): void {
+    void search({ page: nextPage });
   }
 
   function handleSubmit(event: FormEvent<HTMLFormElement>): void {
     event.preventDefault();
-    void search();
+    void search({ page: 1 });
   }
 
   return (
@@ -347,6 +384,35 @@ export function RoomSearch() {
           </div>
         ))}
       </div>
+
+      {results !== null && results.length > 0 ? (
+        <div className="mt-6 flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+            <label htmlFor="pageSize">Rows per page</label>
+            <select
+              id="pageSize"
+              value={pageSize}
+              onChange={handlePageSizeChange}
+              className={inputClassName}
+            >
+              {PAGE_SIZE_OPTIONS.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+            <span>
+              {totalItems} room{totalItems === 1 ? '' : 's'}
+            </span>
+          </div>
+
+          <RoomPagination
+            page={page}
+            totalPages={totalPages}
+            onPageChange={handlePageChange}
+          />
+        </div>
+      ) : null}
     </div>
   );
 }
