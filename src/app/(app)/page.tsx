@@ -1,5 +1,8 @@
+import { getSession } from '@/server/auth/session';
+
 import { RoomSearch } from './room-search';
 
-export default function HomePage() {
-  return <RoomSearch />;
+export default async function HomePage() {
+  const user = await getSession();
+  return <RoomSearch canBook={user?.role === 'USER'} />;
 }

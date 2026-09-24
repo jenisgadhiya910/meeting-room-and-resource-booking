@@ -60,11 +60,16 @@ function cyclic<T>(items: readonly T[], index: number): T {
 async function main() {
   const passwordHash = await hash(DEMO_PASSWORD, { type: argon2id });
 
-  const [alice, admin] = await Promise.all([
+  const [alice, john, admin] = await Promise.all([
     prisma.user.upsert({
       where: { email: 'alice@example.com' },
       update: {},
       create: { email: 'alice@example.com', passwordHash },
+    }),
+    prisma.user.upsert({
+      where: { email: 'john@example.com' },
+      update: {},
+      create: { email: 'john@example.com', passwordHash },
     }),
     prisma.user.upsert({
       where: { email: 'admin@example.com' },
@@ -178,7 +183,7 @@ async function main() {
   }
 
   console.log(
-    `Seeded users: ${alice.email} (USER), ${admin.email} (ADMIN) — password: ${DEMO_PASSWORD}`,
+    `Seeded users: ${alice.email} (USER), ${john.email} (USER), ${admin.email} (ADMIN) — password: ${DEMO_PASSWORD}`,
   );
   console.log(
     `Seeded equipment: ${projector.key}, ${videoConferencing.key}, ${whiteboard.key}`,

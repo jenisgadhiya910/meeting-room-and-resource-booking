@@ -10,6 +10,7 @@ import { AppError, ForbiddenError } from './errors';
 import { errorResponse } from './response';
 
 import type { SessionUser } from '@/server/auth/session';
+import type { Role } from '@/generated/prisma/enums';
 import type { NextRequest } from 'next/server';
 
 const REQUEST_ID_HEADER = 'x-request-id';
@@ -42,10 +43,10 @@ type NextRouteHandler<Params> = (
 export function withRoute<Params = Record<string, never>>(
   handler: RequiredAuthHandler<Params>,
 ): NextRouteHandler<Params>;
-/** Admin-only routes: resolves a session and requires role ADMIN, or throws FORBIDDEN. */
+/** Role-gated routes: resolves a session and requires the given role, or throws FORBIDDEN. */
 export function withRoute<Params = Record<string, never>>(
   handler: RequiredAuthHandler<Params>,
-  options: { role: 'ADMIN' },
+  options: { role: Role },
 ): NextRouteHandler<Params>;
 /** Public/browsable routes that still want the session when one happens to be present. */
 export function withRoute<Params = Record<string, never>>(
@@ -54,7 +55,7 @@ export function withRoute<Params = Record<string, never>>(
 ): NextRouteHandler<Params>;
 export function withRoute<Params>(
   handler: RequiredAuthHandler<Params> | OptionalAuthHandler<Params>,
-  options?: { auth?: 'optional'; role?: 'ADMIN' },
+  options?: { auth?: 'optional'; role?: Role },
 ): NextRouteHandler<Params> {
   const authOptional = options?.auth === 'optional';
 

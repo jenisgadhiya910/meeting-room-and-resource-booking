@@ -12,6 +12,7 @@ import {
   createEquipment as createEquipmentRepo,
   createRoom as createRoomRepo,
   deleteRoom as deleteRoomRepo,
+  findRoomById as findRoomByIdRepo,
   hasActiveOrFutureBookings,
   listAllRoomsForAdmin as listAllRoomsForAdminRepo,
   listEquipment as listEquipmentRepo,
@@ -22,6 +23,7 @@ import {
 
 import type {
   AdminRoomPage,
+  AdminRoomSummary,
   EquipmentPage,
   EquipmentSummary,
   RoomPage,
@@ -123,6 +125,16 @@ export async function deleteRoom(roomId: string): Promise<void> {
     if (isRecordNotFound(error)) throw new NotFoundError('Room');
     throw error;
   }
+}
+
+// The one cross-domain lookup the booking module needs — see
+// booking.service.ts, which calls this rather than reaching into
+// room.repository directly (CLAUDE.md: cross-domain calls go service to
+// service, never repository to repository).
+export async function getRoomById(
+  roomId: string,
+): Promise<AdminRoomSummary | null> {
+  return findRoomByIdRepo(roomId);
 }
 
 export async function listAllRoomsForAdmin(

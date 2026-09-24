@@ -252,7 +252,7 @@ No recurring series yet. Show me the exact sequence when the exclusion constrain
 **Verify:** book a slot, then try an overlapping one manually — confirm 201 then 409 with
 `ROOM_ALREADY_BOOKED`.
 
-- [ ] Done
+- [x] Done
 
 ## Phase 12 — Frontend: booking
 
@@ -269,7 +269,7 @@ Add booking to the search results from Phase 8:
 
 **Verify:** book a room end to end in the browser.
 
-- [ ] Done
+- [x] Done
 
 ## Phase 13 — Concurrency verification script (the headline demo)
 

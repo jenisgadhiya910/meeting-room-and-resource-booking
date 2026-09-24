@@ -104,7 +104,7 @@ POST   /api/admin/rooms                 create a room (admin)
 PATCH  /api/admin/rooms/:id             partial update (admin)
 DELETE /api/admin/rooms/:id             delete (admin)
 POST   /api/admin/equipment             create an equipment type (admin)
-POST   /api/bookings                    single or recurring
+POST   /api/bookings                    single or recurring (user only, not admin)
 GET    /api/bookings                    caller's own bookings
 GET    /api/bookings/:id
 PATCH  /api/bookings/:id                shorten (endsAt)
@@ -114,7 +114,10 @@ GET    /api/admin/utilisation           roomId?, from, to → hours booked vs av
 ```
 
 `withRoute(handler, { role: 'ADMIN' })` gates the four admin room/equipment routes and
-`/api/admin/utilisation` — it resolves the session via the same `requireUser()` every other
+`/api/admin/utilisation`; `withRoute(handler, { role: 'USER' })` gates `POST /api/bookings` the
+same way, the other direction — per PROJECT.md's role split, booking is a user action, not
+something an admin session does. Both reuse the same `{ role }` option, generic over `Role`,
+not two separate mechanisms: it resolves the session via the same `requireUser()` every other
 authenticated route uses, then additionally checks `user.role`, so there's no separate
 role-lookup path to keep in sync.
 

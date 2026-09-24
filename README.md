@@ -89,6 +89,27 @@ curl -b admin-cookies.txt -X DELETE localhost:3000/api/admin/rooms/<id>
 Only `admin@example.com` can call these (`403 FORBIDDEN` otherwise). See "Documented decisions"
 below for the update/delete guard and why bookings never show live room data.
 
+## Bookings
+
+```bash
+curl -b cookies.txt -X POST localhost:3000/api/bookings \
+  -H 'Content-Type: application/json' \
+  -d '{"roomId":"<id>","startsAt":"2026-10-01T10:00:00.000Z","endsAt":"2026-10-01T11:00:00.000Z"}'
+# 201, with the room's name/location/capacity/equipment captured in roomSnapshot
+
+curl -b cookies.txt -X POST localhost:3000/api/bookings \
+  -H 'Content-Type: application/json' \
+  -d '{"roomId":"<id>","startsAt":"2026-10-01T10:30:00.000Z","endsAt":"2026-10-01T11:30:00.000Z"}'
+# 409 ROOM_ALREADY_BOOKED — same room, overlapping window
+
+curl -b cookies.txt localhost:3000/api/bookings          # your own bookings, cursor-paginated
+curl -b cookies.txt localhost:3000/api/bookings/<id>      # 403 if it isn't yours, 404 if it doesn't exist
+```
+
+Every overlapping request is rejected by the `bookings_no_overlap` exclusion constraint, never
+by an application-level check — see [ADR 0001](./docs/adr/0001-double-booking-prevention.md).
+A rejected attempt still writes a `BOOKING_REJECTED_OVERLAP` audit row.
+
 ## Environment variables
 
 | Variable                                              | Purpose                                                                                                                                    |
@@ -128,5 +149,21 @@ below for the update/delete guard and why bookings never show live room data.
 - **No Jest/Vitest/Playwright.** `scripts/verify-concurrency.ts` and `scripts/verify-ownership.ts`
   are the runnable evidence in place of an automated test suite — a deliberate substitution,
   documented in `CLAUDE.md`.
+- **A booking can only be made against an `active` room.** Not stated explicitly in the spec;
+  the availability search already only ever surfaces active rooms, so `POST /api/bookings`
+  rejects a direct request against an inactive or unknown room the same way — `400
+VALIDATION_FAILED`, not a distinct code, since either way the caller sent a room id that isn't
+  currently bookable.
+- **Only a `USER` session can create a booking; `ADMIN` gets `403 FORBIDDEN`.** Per PROJECT.md's
+  role table, booking is a user action — admins manage the room catalogue and view utilisation,
+  they don't book rooms themselves. `withRoute(handler, { role: 'USER' })` gates
+  `POST /api/bookings` the same generic way `{ role: 'ADMIN' }` gates the admin routes.
+- **`GET /api/bookings` keeps real keyset (cursor) pagination**, ordered by `startsAt desc, id
+desc` — the one collection the room-listings decision above explicitly carves out, being
+  scoped to one caller and, unlike the room catalogue, expected to keep growing. The cursor is
+  an opaque token encoding `(startsAt, id)`, not just `id`: `startsAt` alone isn't unique (two
+  bookings, even for different rooms, can start at the same instant), so an id-only cursor would
+  risk skipping or repeating a row at a page boundary — the exact failure mode
+  [Phase 9](./docs/roadmap.md) exists to teach avoiding.
 - Still to resolve in later phases: shortening an already-started booking, the all-or-nothing
   recurring series rule, and the bookable window used by the utilisation view.

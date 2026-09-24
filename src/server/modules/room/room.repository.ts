@@ -282,6 +282,21 @@ export async function listAllRoomsForAdmin(
   return paginateOffset(rooms.map(toAdminSummary), totalItems, page, pageSize);
 }
 
+// Reuses the admin select/mapper rather than a third near-identical one:
+// booking creation needs to know `active` (a room shouldn't be bookable once
+// taken out of the catalogue) the same way the admin view does, plus the
+// same name/location/capacity/equipment fields that become the booking's
+// roomSnapshot — see booking.service.ts.
+export async function findRoomById(
+  id: string,
+): Promise<AdminRoomSummary | null> {
+  const room = await prisma.room.findUnique({
+    where: { id },
+    select: adminRoomSelect,
+  });
+  return room ? toAdminSummary(room) : null;
+}
+
 // "Active or future": any CONFIRMED booking that hasn't ended yet — covers
 // one already in progress (started, not yet ended) and one still upcoming.
 export async function hasActiveOrFutureBookings(

@@ -3,6 +3,7 @@
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 
+import { BookRoomButton } from './book-room-button';
 import { RoomPagination } from '@/components/room-pagination';
 import { apiFetch } from '@/lib/api-client';
 import {
@@ -56,7 +57,14 @@ function toIsoDateTime(date: string, time: string): string {
   return new Date(`${date}T${time}`).toISOString();
 }
 
-export function RoomSearch() {
+interface Props {
+  // Booking is a USER-only action (see api-routes.md / room.service.ts's
+  // role-gated route) — an admin session still gets to search, it just
+  // never sees a Book action to click.
+  canBook: boolean;
+}
+
+export function RoomSearch({ canBook }: Props) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -83,6 +91,14 @@ export function RoomSearch() {
   });
 
   const [results, setResults] = useState<RoomSummary[] | null>(null);
+  // The exact instant window the current `results` were searched for — kept
+  // separate from the live `date`/`startTime`/`endTime` form fields, which
+  // the user can go on editing without having re-searched yet. Booking a
+  // result always books the slot it was actually found for.
+  const [searchedWindow, setSearchedWindow] = useState<{
+    startsAt: string;
+    endsAt: string;
+  } | null>(null);
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [totalItems, setTotalItems] = useState(0);
@@ -124,7 +140,7 @@ export function RoomSearch() {
     order?: SortOrder;
     page?: number;
     pageSize?: number;
-  }): URLSearchParams {
+  }): { params: URLSearchParams; from: string; to: string } {
     const from = toIsoDateTime(date, startTime);
     const to = toIsoDateTime(date, endTime);
     if (new Date(to) <= new Date(from)) {
@@ -141,7 +157,7 @@ export function RoomSearch() {
     });
     if (minCapacity) params.set('minCapacity', minCapacity);
     for (const key of selectedEquipment) params.append('equipment', key);
-    return params;
+    return { params, from, to };
   }
 
   async function search(overrides?: {
@@ -154,11 +170,12 @@ export function RoomSearch() {
     setIsSearching(true);
 
     try {
-      const params = buildAvailabilityParams(overrides);
+      const { params, from, to } = buildAvailabilityParams(overrides);
       const response = await apiFetch<RoomListResponse>(
         `/api/rooms/availability?${params.toString()}`,
       );
       setResults(response.data);
+      setSearchedWindow({ startsAt: from, endsAt: to });
       setPage(response.meta.page);
       setTotalItems(response.meta.totalItems);
       setTotalPages(response.meta.totalPages);
@@ -365,21 +382,39 @@ export function RoomSearch() {
         {results?.map((room) => (
           <div
             key={room.id}
-            className="rounded-md border border-gray-200 p-4 dark:border-gray-800"
+            className="flex items-start justify-between gap-4 rounded-md border border-gray-200 p-4 dark:border-gray-800"
           >
-            <div className="flex items-baseline justify-between gap-4">
-              <span className="font-medium">{room.name}</span>
-              <span className="text-sm text-gray-500 dark:text-gray-400">
-                {room.location}
-              </span>
-            </div>
-            <p className="text-sm text-gray-500 dark:text-gray-400">
-              Capacity: {room.capacity}
-            </p>
-            {room.equipment.length > 0 ? (
-              <p className="mt-1 text-sm">
-                {room.equipment.map((item) => item.label).join(', ')}
+            <div>
+              <div className="flex items-baseline gap-4">
+                <span className="font-medium">{room.name}</span>
+                <span className="text-sm text-gray-500 dark:text-gray-400">
+                  {room.location}
+                </span>
+              </div>
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                Capacity: {room.capacity}
               </p>
+              {room.equipment.length > 0 ? (
+                <p className="mt-1 text-sm">
+                  {room.equipment.map((item) => item.label).join(', ')}
+                </p>
+              ) : null}
+            </div>
+
+            {canBook && searchedWindow ? (
+              <BookRoomButton
+                // Forces a fresh instance per (room, slot) pair — without
+                // this, changing the search window keeps the same
+                // component mounted (React reconciles by key, and
+                // `key={room.id}` on the card above is unaffected by a
+                // slot change), so a stale "booked" step from a previous
+                // slot would otherwise survive into an unrelated one.
+                key={`${room.id}:${searchedWindow.startsAt}:${searchedWindow.endsAt}`}
+                roomId={room.id}
+                startsAt={searchedWindow.startsAt}
+                endsAt={searchedWindow.endsAt}
+                onSearchAgain={() => void search({ page })}
+              />
             ) : null}
           </div>
         ))}
