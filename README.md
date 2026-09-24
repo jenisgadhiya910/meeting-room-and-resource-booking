@@ -45,10 +45,12 @@ Docker Compose only runs the database.
 | Email               | Role  | Password       |
 | ------------------- | ----- | -------------- |
 | `alice@example.com` | USER  | `Password123!` |
+| `john@example.com`  | USER  | `Password123!` |
 | `admin@example.com` | ADMIN | `Password123!` |
 
 plus 4 rooms (Alpha, Beta, Gamma, Delta) with a mix of projector / video-conferencing /
-whiteboard equipment.
+whiteboard equipment. Two seeded `USER` accounts exist so `scripts/verify-concurrency.ts` can
+race two different people over the same room, not one person against themselves.
 
 ## Auth
 
@@ -109,6 +111,29 @@ curl -b cookies.txt localhost:3000/api/bookings/<id>      # 403 if it isn't your
 Every overlapping request is rejected by the `bookings_no_overlap` exclusion constraint, never
 by an application-level check — see [ADR 0001](./docs/adr/0001-double-booking-prevention.md).
 A rejected attempt still writes a `BOOKING_REJECTED_OVERLAP` audit row.
+
+## Concurrency verification
+
+The headline demo — proves two truly simultaneous overlapping booking requests can never both
+succeed, against a running `yarn dev` server:
+
+```bash
+yarn db:seed              # needs the seeded alice@example.com and john@example.com accounts
+yarn verify:concurrency
+```
+
+Fires 20 rounds of two genuinely simultaneous `POST /api/bookings` requests (one from each
+seeded user, `Promise.all`, same room, same slot) and asserts every round comes back exactly
+one `201` and one `409 ROOM_ALREADY_BOOKED`. A single passing run isn't evidence on its own —
+see the comment at the top of `scripts/verify-concurrency.ts` and
+[ADR 0001](./docs/adr/0001-double-booking-prevention.md) for why. Re-running it immediately
+back-to-back a handful of times is fine; running it more than a couple of times within the same
+minute will trip the login route's rate limit (`429 RATE_LIMITED`) — that's the rate limiter
+working as intended, not a bug in the script.
+
+Every booking and audit row the run creates is deleted again before the process exits, whether
+the run passed or failed, so it's safe to run repeatedly against a real dev database without
+piling up throwaway data — see `cleanUp()` in the script.
 
 ## Environment variables
 

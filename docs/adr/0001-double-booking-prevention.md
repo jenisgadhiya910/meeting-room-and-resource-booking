@@ -19,7 +19,10 @@ EXCLUDE USING gist ("roomId" WITH =, tstzrange("startsAt", "endsAt", '[)') WITH 
 ```
 
 The application inserts optimistically and translates SQLSTATE `23P01` into
-`409 ROOM_ALREADY_BOOKED`.
+`409 ROOM_ALREADY_BOOKED`. Two inserts landing at genuinely the same instant occasionally get a
+serialization failure (`40001`/`40P01`, Prisma code `P2034`) from Postgres's deadlock detector
+instead of a clean `23P01` — the service retries that specific, documented "please retry your
+transaction" error once before giving up; see Consequences.
 
 ## Why
 
@@ -68,6 +71,13 @@ expressible as uniqueness, but forces a fixed slot granularity, multiplies rows,
 - Error handling depends on a driver-level SQLSTATE rather than a Prisma error code, so the
   detection helper is the one place that knows about `23P01` and the constraint name.
 - Booking rows are never hard-deleted, because the partial predicate depends on `status`.
+- The exclusion constraint isn't fully immune to the `40001` retry concern raised against
+  `SERIALIZABLE` above — it just hits it far more rarely (only two writers landing at genuinely
+  the same instant, not every read-then-write) and the fix is a single bounded retry of the
+  same insert, not a retry loop threaded through every write path. `booking.service.ts` retries
+  up to twice on Prisma's `P2034` before surfacing anything else as an error; this was not a
+  theoretical concern added up front — `scripts/verify-concurrency.ts`'s repeated rounds
+  produced one in early testing, surfacing a 500 where a 409 was expected.
 
 ## Verification
 

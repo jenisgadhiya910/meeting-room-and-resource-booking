@@ -286,7 +286,7 @@ times in a row and explain why a single passing run isn't sufficient evidence.
 now that the booking UI exists (Phase 12), open two browser tabs and try to book the same slot
 from both to see the 409 surface in the UI — but the script, not the tabs, is the real evidence.
 
-- [ ] Done
+- [x] Done
 
 ## Phase 14 — Cancel, shorten & ownership (backend)
 

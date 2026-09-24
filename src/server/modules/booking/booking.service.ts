@@ -61,6 +61,48 @@ function isOverlapViolation(error: unknown): boolean {
   );
 }
 
+// Two transactions inserting genuinely at the same instant don't always get
+// the clean "second one blocks, then fails with 23P01" sequence the ADR
+// describes — Postgres's own deadlock detector can instead abort one side
+// with a serialization failure (SQLSTATE 40001/40P01), which Prisma
+// surfaces as the stable, documented code P2034 ("Transaction failed due to
+// a write conflict or a deadlock. Please retry your transaction"), not
+// P2039. Confirmed against this exact stack by scripts/verify-concurrency.ts
+// itself: with 20 genuinely simultaneous rounds, one round's loser got
+// P2034 instead of a clean overlap violation. Retrying the *same* insert
+// isn't the forbidden check-then-insert shortcut — the exclusion constraint
+// is still the only thing deciding the outcome; this just gives Postgres a
+// second attempt once the other transaction has actually committed or
+// rolled back, at which point the retry deterministically sees a normal,
+// cleanly-detected 23P01.
+const MAX_CREATE_ATTEMPTS = 3;
+
+function isTransientWriteConflict(error: unknown): boolean {
+  return (
+    error instanceof Prisma.PrismaClientKnownRequestError &&
+    error.code === 'P2034'
+  );
+}
+
+async function createBookingWithRetry(
+  input: Parameters<typeof createBookingRepo>[0],
+): Promise<BookingSummary> {
+  for (let attempt = 1; attempt <= MAX_CREATE_ATTEMPTS; attempt += 1) {
+    try {
+      return await createBookingRepo(input);
+    } catch (error: unknown) {
+      if (isTransientWriteConflict(error) && attempt < MAX_CREATE_ATTEMPTS)
+        continue;
+      throw error;
+    }
+  }
+  // Unreachable: every iteration above either returns or throws by the
+  // final attempt — TypeScript can't see that statically from a bounded
+  // `for` loop, so this satisfies "the function must return" without ever
+  // actually running.
+  throw new Error('unreachable');
+}
+
 export interface CreateBookingParams extends CreateBookingInput {
   actorId: string;
   requestId: string;
@@ -80,7 +122,7 @@ export async function create(
   const endsAt = new Date(params.endsAt);
 
   try {
-    return await createBookingRepo({
+    return await createBookingWithRetry({
       roomId: params.roomId,
       userId: params.actorId,
       startsAt,
