@@ -1,12 +1,9 @@
-import { z } from 'zod';
-
 import { writeAuditEvent } from '@/server/audit';
 import { prisma } from '@/server/db/prisma';
-import { ValidationError } from '@/server/http/errors';
 
 import { roomSnapshotSchema } from './booking.schema';
 
-import type { ListBookingsQuery, RoomSnapshot } from './booking.schema';
+import type { BookingListPagination, RoomSnapshot } from './booking.schema';
 import type { Prisma } from '@/generated/prisma/client';
 import type { BookingStatus } from '@/generated/prisma/enums';
 
@@ -158,6 +155,74 @@ export async function writeRejectedOverlapAudit(
   });
 }
 
+export interface CancelBookingParams {
+  id: string;
+  actorId: string;
+  requestId: string;
+}
+
+// The time/status rules (already ended, already cancelled, already started
+// and moving endsAt earlier than now) are all checked in the service before
+// this is called — this just does the write. No WHERE-clause status guard
+// against a concurrent double-cancel: unlike the overlap invariant, ending
+// up CANCELLED twice is harmless (same end state either way), so it doesn't
+// need the same hard DB-level enforcement — see ADR 0001 for which
+// invariant actually needed that.
+export async function cancelBooking(
+  params: CancelBookingParams,
+): Promise<BookingSummary> {
+  return prisma.$transaction(async (tx) => {
+    const booking = await tx.booking.update({
+      where: { id: params.id },
+      data: { status: 'CANCELLED', cancelledAt: new Date() },
+      select: bookingSelect,
+    });
+
+    await writeAuditEvent(tx, {
+      actorId: params.actorId,
+      action: 'BOOKING_CANCELLED',
+      outcome: 'SUCCESS',
+      roomId: booking.roomId,
+      bookingId: booking.id,
+      requestId: params.requestId,
+      payload: { cancelledAt: booking.cancelledAt?.toISOString() ?? null },
+    });
+
+    return toSummary(booking);
+  });
+}
+
+export interface ShortenBookingParams {
+  id: string;
+  endsAt: Date;
+  actorId: string;
+  requestId: string;
+}
+
+export async function shortenBooking(
+  params: ShortenBookingParams,
+): Promise<BookingSummary> {
+  return prisma.$transaction(async (tx) => {
+    const booking = await tx.booking.update({
+      where: { id: params.id },
+      data: { endsAt: params.endsAt },
+      select: bookingSelect,
+    });
+
+    await writeAuditEvent(tx, {
+      actorId: params.actorId,
+      action: 'BOOKING_SHORTENED',
+      outcome: 'SUCCESS',
+      roomId: booking.roomId,
+      bookingId: booking.id,
+      requestId: params.requestId,
+      payload: { endsAt: params.endsAt.toISOString() },
+    });
+
+    return toSummary(booking);
+  });
+}
+
 export async function findById(id: string): Promise<BookingSummary | null> {
   const row = await prisma.booking.findUnique({
     where: { id },
@@ -166,70 +231,89 @@ export async function findById(id: string): Promise<BookingSummary | null> {
   return row ? toSummary(row) : null;
 }
 
-// Opaque (startsAt, id) cursor. `id` alone isn't enough once the list is
-// ordered by startsAt (a non-unique column) — two bookings, even for
-// different rooms, can start at the exact same instant, and an id-only
-// cursor would then silently skip or repeat a row at that page boundary.
-// Same lesson as room.repository.ts's buildRoomOrderBy, just without a
-// `@@unique([startsAt, id])` to hand to Prisma's own `cursor` API, so the
-// seek predicate below is built by hand instead.
-const cursorPayloadSchema = z.object({
-  startsAt: z.iso.datetime({ offset: true }),
-  id: z.uuid(),
-});
-
-function encodeCursor(row: { startsAt: Date; id: string }): string {
-  return Buffer.from(
-    JSON.stringify({ startsAt: row.startsAt.toISOString(), id: row.id }),
-  ).toString('base64url');
-}
-
-function decodeCursor(cursor: string): { startsAt: Date; id: string } {
-  let raw: unknown;
-  try {
-    raw = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8'));
-  } catch {
-    throw new ValidationError('Invalid cursor');
-  }
-  const parsed = cursorPayloadSchema.safeParse(raw);
-  if (!parsed.success) throw new ValidationError('Invalid cursor');
-  return { startsAt: new Date(parsed.data.startsAt), id: parsed.data.id };
-}
-
-export interface BookingListPage {
+export interface BookingPage {
   items: BookingSummary[];
-  nextCursor: string | null;
+  page: number;
+  pageSize: number;
+  totalItems: number;
+  totalPages: number;
+}
+
+// "My bookings" surfaces what's actually useful first: CONFIRMED bookings
+// that haven't ended yet, soonest start first (an in-progress booking, by
+// definition already started, sorts ahead of ones that haven't started
+// yet). Everything else — cancelled, or already ended — follows, most
+// recently relevant first. That's two partitions of one logical list
+// sorted in *opposite* directions, and page-number pagination has to slice
+// a single window out of their concatenation.
+//
+// Deliberately two `count` + two `findMany` calls (all through the query
+// builder, no $queryRaw) rather than one cleverer query: work out how many
+// rows of each partition a page needs, then only query the partition(s)
+// that page actually overlaps. A page fully inside one partition only
+// queries that one; only the page straddling the boundary queries both.
+function upcomingWhere(userId: string, now: Date): Prisma.BookingWhereInput {
+  return { userId, status: 'CONFIRMED', endsAt: { gt: now } };
+}
+
+function pastWhere(userId: string, now: Date): Prisma.BookingWhereInput {
+  return { userId, OR: [{ status: 'CANCELLED' }, { endsAt: { lte: now } }] };
 }
 
 export async function listByUser(
   userId: string,
-  query: ListBookingsQuery,
-): Promise<BookingListPage> {
-  const { limit, cursor } = query;
-  const seek = cursor !== undefined ? decodeCursor(cursor) : null;
+  query: BookingListPagination,
+): Promise<BookingPage> {
+  const { page, pageSize } = query;
+  // One instant for the whole call — count and findMany must agree on
+  // which bucket each row is in, or a row could be double-counted or
+  // dropped for a page that happens to straddle the boundary.
+  const now = new Date();
 
-  const rows = await prisma.booking.findMany({
-    where: {
-      userId,
-      // Seek method: continue strictly past the cursor row in the same
-      // (startsAt desc, id desc) order the query is sorted in.
-      ...(seek
-        ? {
-            OR: [
-              { startsAt: { lt: seek.startsAt } },
-              { startsAt: seek.startsAt, id: { lt: seek.id } },
-            ],
-          }
-        : {}),
-    },
-    select: bookingSelect,
-    orderBy: [{ startsAt: 'desc' }, { id: 'desc' }],
-    take: limit + 1,
-  });
+  const [upcomingCount, pastCount] = await Promise.all([
+    prisma.booking.count({ where: upcomingWhere(userId, now) }),
+    prisma.booking.count({ where: pastWhere(userId, now) }),
+  ]);
 
-  const items = rows.slice(0, limit);
-  const last = items.at(-1);
-  const nextCursor = rows.length > limit && last ? encodeCursor(last) : null;
+  const totalItems = upcomingCount + pastCount;
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+  const skip = (page - 1) * pageSize;
 
-  return { items: items.map(toSummary), nextCursor };
+  // How much of this page's window falls in each partition. A page
+  // entirely within the upcoming partition takes 0 from the past one (and
+  // vice versa) — the `> 0` guards below skip querying a partition this
+  // page doesn't touch at all.
+  const upcomingTake = Math.max(0, Math.min(pageSize, upcomingCount - skip));
+  const pastTake = pageSize - upcomingTake;
+  const pastSkip = Math.max(0, skip - upcomingCount);
+
+  const [upcomingRows, pastRows] = await Promise.all([
+    upcomingTake > 0
+      ? prisma.booking.findMany({
+          where: upcomingWhere(userId, now),
+          select: bookingSelect,
+          // Tiebreaker matches the primary column's direction, same
+          // reasoning as room.repository.ts's buildRoomOrderBy: without
+          // it, two bookings tied on startsAt could land on either side
+          // of a skip/take boundary in a different order on every
+          // request.
+          orderBy: [{ startsAt: 'asc' }, { id: 'asc' }],
+          skip,
+          take: upcomingTake,
+        })
+      : Promise.resolve([]),
+    pastTake > 0
+      ? prisma.booking.findMany({
+          where: pastWhere(userId, now),
+          select: bookingSelect,
+          orderBy: [{ startsAt: 'desc' }, { id: 'desc' }],
+          skip: pastSkip,
+          take: pastTake,
+        })
+      : Promise.resolve([]),
+  ]);
+
+  const items = [...upcomingRows, ...pastRows].map(toSummary);
+
+  return { items, page, pageSize, totalItems, totalPages };
 }

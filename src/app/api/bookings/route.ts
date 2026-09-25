@@ -1,8 +1,8 @@
 import { created, ok } from '@/server/http/response';
 import { withRoute } from '@/server/http/with-route';
 import {
+  bookingListPaginationSchema,
   createBookingSchema,
-  listBookingsQuerySchema,
 } from '@/server/modules/booking/booking.schema';
 import { create, list } from '@/server/modules/booking/booking.service';
 
@@ -22,9 +22,12 @@ export const POST = withRoute(
 // Own only — filtered by session user in the WHERE clause, never fetched
 // then filtered (security-and-audit.md).
 export const GET = withRoute(async ({ request, user }) => {
-  const query = listBookingsQuerySchema.parse(
+  const query = bookingListPaginationSchema.parse(
     Object.fromEntries(request.nextUrl.searchParams),
   );
-  const { items, nextCursor } = await list(user.id, query);
-  return ok({ data: items, meta: { nextCursor } });
+  const { items, page, pageSize, totalItems, totalPages } = await list(
+    user.id,
+    query,
+  );
+  return ok({ data: items, meta: { page, pageSize, totalItems, totalPages } });
 });

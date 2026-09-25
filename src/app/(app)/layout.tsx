@@ -20,6 +20,14 @@ export default async function AppLayout({ children }: LayoutProps<'/'>) {
           >
             Search
           </Link>
+          {user.role === 'USER' ? (
+            <Link
+              href="/my-bookings"
+              className="text-sm text-gray-500 hover:underline dark:text-gray-400"
+            >
+              My bookings
+            </Link>
+          ) : null}
           {user.role === 'ADMIN' ? (
             <Link
               href="/admin"

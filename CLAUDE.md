@@ -21,6 +21,7 @@ yarn db:migrate               # prisma migrate dev
 yarn db:studio                # prisma studio
 yarn db:seed                  # tsx prisma/seed.ts
 yarn verify:concurrency       # tsx scripts/verify-concurrency.ts  (see "No tests" below)
+yarn verify:ownership         # tsx scripts/verify-ownership.ts    (see "No tests" below)
 docker compose up             # full stack; nothing manual beyond a filled-in .env
 ```
 
@@ -61,7 +62,9 @@ or `NextResponse`. Cross-domain calls go service → service, never repository �
   Vitest, Playwright, `*.test.ts`, or `__tests__/`. Correctness evidence lives in runnable
   scripts under `scripts/` instead — most importantly `scripts/verify-concurrency.ts`, which
   fires two genuinely simultaneous overlapping bookings and asserts exactly one wins. Keep
-  that script working; it is the headline demo.
+  that script working; it is the headline demo. `scripts/verify-ownership.ts` is the same idea
+  for authorisation: guessing someone else's booking id must come back 403, never a successful
+  read, cancel or shorten.
 - **Validate at the boundary.** Every request body, query string and route param is parsed
   with zod inside the route handler. Invalid input is rejected before any service call.
 - **Every mutating route is authenticated**, and ownership is re-checked in the service using

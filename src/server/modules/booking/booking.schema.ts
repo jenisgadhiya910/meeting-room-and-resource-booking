@@ -17,19 +17,28 @@ export const bookingIdParamSchema = z.object({
   bookingId: z.uuid(),
 });
 
-// "My bookings" keeps real keyset (cursor) pagination rather than the
-// page-number pagination room listings switched to — see README's
-// "Documented decisions": a caller-scoped, potentially fast-growing
-// collection like bookings is exactly the case that page-number pagination
-// was deliberately not chosen for. The cursor is opaque to the caller; see
-// booking.repository.ts for what it actually encodes and why an id-only
-// cursor isn't enough once the list is ordered by startsAt.
-export const listBookingsQuerySchema = z.object({
-  limit: z.coerce.number().int().min(1).max(200).default(50),
-  cursor: z.string().min(1).optional(),
+// Shorten only moves endsAt earlier — the cross-field comparison against
+// the booking's *current* endsAt can't be expressed here (this schema only
+// ever sees the request body, never the existing row), so that half of the
+// rule lives in booking.service.ts instead. See booking-domain.md.
+export const shortenBookingSchema = z.object({
+  endsAt: z.iso.datetime({ offset: true }),
 });
 
-export type ListBookingsQuery = z.infer<typeof listBookingsQuerySchema>;
+export type ShortenBookingInput = z.infer<typeof shortenBookingSchema>;
+
+// Page-number pagination, same shape as room.schema.ts's
+// roomListPaginationSchema — lets the "My bookings" UI show real page
+// numbers via the same RoomPagination component the room listings use,
+// rather than a cursor-driven "load more". See booking.repository.ts for
+// how this interacts with the upcoming/past sort — two Prisma queries
+// (count + findMany) per bucket, never raw SQL.
+export const bookingListPaginationSchema = z.object({
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(200).default(10),
+});
+
+export type BookingListPagination = z.infer<typeof bookingListPaginationSchema>;
 
 // Booking.roomSnapshot is stored as Json — untyped until parsed. This is the
 // one place that knows its shape, per booking-domain.md ("name/location/

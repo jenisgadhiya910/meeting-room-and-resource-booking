@@ -8,17 +8,26 @@ import {
 } from '@/server/http/errors';
 import { getRoomById } from '@/server/modules/room/room.service';
 
-import { RoomAlreadyBookedError } from './booking.errors';
 import {
+  BookingNotModifiableError,
+  RoomAlreadyBookedError,
+} from './booking.errors';
+import {
+  cancelBooking as cancelBookingRepo,
   createBooking as createBookingRepo,
   findById as findByIdRepo,
   findConflictingBookings,
   listByUser as listByUserRepo,
+  shortenBooking as shortenBookingRepo,
   writeRejectedOverlapAudit,
 } from './booking.repository';
 
-import type { BookingListPage, BookingSummary } from './booking.repository';
-import type { CreateBookingInput, ListBookingsQuery } from './booking.schema';
+import type { BookingPage, BookingSummary } from './booking.repository';
+import type {
+  BookingListPagination,
+  CreateBookingInput,
+  ShortenBookingInput,
+} from './booking.schema';
 
 const PG_EXCLUSION_VIOLATION = '23P01';
 const OVERLAP_CONSTRAINT_NAME = 'bookings_no_overlap';
@@ -155,7 +164,12 @@ export async function create(
   }
 }
 
-export async function getById(
+// Shared by every single-booking operation (read, cancel, shorten):
+// resolve-or-404, then ownership-or-403, checked against the session id —
+// never an id from the request body (security-and-audit.md). Guessing
+// someone else's booking id must come back 403 here, not a successful
+// read/cancel/shorten; scripts/verify-ownership.ts proves this end to end.
+async function loadOwnedBooking(
   bookingId: string,
   actorId: string,
 ): Promise<BookingSummary> {
@@ -165,9 +179,83 @@ export async function getById(
   return booking;
 }
 
+export async function getById(
+  bookingId: string,
+  actorId: string,
+): Promise<BookingSummary> {
+  return loadOwnedBooking(bookingId, actorId);
+}
+
 export async function list(
   actorId: string,
-  query: ListBookingsQuery,
-): Promise<BookingListPage> {
+  query: BookingListPagination,
+): Promise<BookingPage> {
   return listByUserRepo(actorId, query);
+}
+
+// Applies to both cancel and shorten (booking-domain.md's "Cancel and
+// shorten"): a booking that's already CANCELLED or already ended cannot be
+// touched again. "Already cancelled" isn't spelled out verbatim in that
+// doc — a CANCELLED booking can still have a future endsAt, so "already
+// ended" alone doesn't cover it — but re-cancelling (moving cancelledAt
+// forward) or shortening a cancelled booking is clearly not what the rule
+// intends; see README's "Documented decisions".
+function assertModifiable(booking: BookingSummary, now: Date): void {
+  if (booking.status !== 'CONFIRMED') {
+    throw new BookingNotModifiableError(
+      'This booking has already been cancelled',
+    );
+  }
+  if (booking.endsAt <= now) {
+    throw new BookingNotModifiableError('This booking has already ended');
+  }
+}
+
+export async function cancel(
+  bookingId: string,
+  actorId: string,
+  requestId: string,
+): Promise<BookingSummary> {
+  const booking = await loadOwnedBooking(bookingId, actorId);
+  assertModifiable(booking, new Date());
+
+  return cancelBookingRepo({ id: bookingId, actorId, requestId });
+}
+
+export async function shorten(
+  bookingId: string,
+  actorId: string,
+  input: ShortenBookingInput,
+  requestId: string,
+): Promise<BookingSummary> {
+  const booking = await loadOwnedBooking(bookingId, actorId);
+  const now = new Date();
+  assertModifiable(booking, now);
+
+  const newEndsAt = new Date(input.endsAt);
+  if (newEndsAt >= booking.endsAt) {
+    throw new ValidationError(
+      'endsAt must be earlier than the current endsAt — moving it later is a new booking, not a shorten',
+    );
+  }
+
+  const hasStarted = booking.startsAt <= now;
+  if (hasStarted) {
+    // "You can end a meeting early, you cannot retroactively unbook time
+    // you have already occupied" — booking-domain.md.
+    if (newEndsAt < now) {
+      throw new BookingNotModifiableError(
+        'This booking has already started; it can only be shortened to now or later',
+      );
+    }
+  } else if (newEndsAt <= booking.startsAt) {
+    throw new ValidationError('endsAt must be after startsAt');
+  }
+
+  return shortenBookingRepo({
+    id: bookingId,
+    endsAt: newEndsAt,
+    actorId,
+    requestId,
+  });
 }

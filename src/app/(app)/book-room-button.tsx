@@ -3,6 +3,7 @@
 import { useState } from 'react';
 
 import { ApiError, apiFetch } from '@/lib/api-client';
+import { formatDateTimeRange } from '@/lib/format';
 import { primaryButtonClassName, secondaryButtonClassName } from '@/lib/ui';
 
 import type { CreateBookingInput } from '@/server/modules/booking/booking.schema';
@@ -22,17 +23,6 @@ type Step = 'idle' | 'confirming' | 'booking' | 'booked';
 interface BookingError {
   code: string;
   message: string;
-}
-
-function formatWindow(startsAt: string, endsAt: string): string {
-  const start = new Date(startsAt);
-  const end = new Date(endsAt);
-  const startText = start.toLocaleString(undefined, {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  });
-  const endText = end.toLocaleTimeString(undefined, { timeStyle: 'short' });
-  return `${startText} – ${endText}`;
 }
 
 // Surfaces the specific failure the roadmap calls out (409 conflict) rather
@@ -112,7 +102,7 @@ export function BookRoomButton({
     return (
       <div className="flex flex-col items-end gap-2 text-right">
         <span className="text-sm">
-          Book for {formatWindow(startsAt, endsAt)}?
+          Book for {formatDateTimeRange(startsAt, endsAt)}?
         </span>
         <div className="flex gap-2">
           <button

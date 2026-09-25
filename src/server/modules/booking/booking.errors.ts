@@ -11,3 +11,14 @@ export class RoomAlreadyBookedError extends ConflictError {
     );
   }
 }
+
+// Covers every reason a cancel/shorten is refused by a time or status rule
+// (already ended, already cancelled, or — shorten only — already started
+// and the new endsAt is earlier than now) — see booking-domain.md's
+// "Cancel and shorten". The message differs per call site; the code never
+// does.
+export class BookingNotModifiableError extends ConflictError {
+  constructor(message: string) {
+    super('BOOKING_NOT_MODIFIABLE', message);
+  }
+}

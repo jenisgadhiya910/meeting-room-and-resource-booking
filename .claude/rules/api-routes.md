@@ -123,7 +123,12 @@ role-lookup path to keep in sync.
 
 - Filtering, sorting and pagination are query parameters parsed by zod, then pushed into SQL.
   Never fetch everything and filter in JavaScript.
-- Collections are paginated with `limit`/`cursor`; default `limit` 50, hard cap 200.
+- Collections are paginated. `GET /api/equipment` uses `limit`/`cursor` (default `limit` 50,
+  hard cap 200) since it only ever backs filter checkboxes, never a paged UI. Everything with a
+  paged UI in front of it (`GET /api/rooms`, `/api/rooms/availability`, `/api/admin/rooms`,
+  `GET /api/bookings`) uses `page`/`pageSize` (default `pageSize` 10, hard cap 200) instead, so
+  the frontend can show real page numbers via `RoomPagination` — see room.schema.ts's
+  `roomListPaginationSchema` and booking.schema.ts's `bookingListPaginationSchema`.
 - Don't declare `export const runtime = 'nodejs'` — every route handler already runs on the
   Node.js runtime by default in Next.js 16 unless it opts into `edge` explicitly, so the
   declaration is redundant. (No route here opts into `edge` — the Prisma client couldn't run on

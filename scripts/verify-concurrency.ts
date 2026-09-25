@@ -42,15 +42,18 @@ import { randomInt } from 'node:crypto';
 
 import { prisma } from '@/server/db/prisma';
 
-import type { LoginInput } from '@/server/modules/auth/auth.schema';
+import {
+  BASE_URL,
+  USER_A_EMAIL,
+  USER_B_EMAIL,
+  errorCodeOf,
+  fetchRoomId,
+  login,
+} from './lib/verify-client';
+
 import type { CreateBookingInput } from '@/server/modules/booking/booking.schema';
 
-const BASE_URL = process.env.APP_URL ?? 'http://localhost:3000';
 const DEFAULT_ROUNDS = 20;
-
-const DEMO_PASSWORD = 'Password123!';
-const USER_A_EMAIL = 'alice@example.com';
-const USER_B_EMAIL = 'john@example.com';
 
 // Every round gets its own day, `ROUND_SPACING_MS` apart, so rounds within
 // one run can never collide with each other no matter how many run.
@@ -72,75 +75,6 @@ const CALENDAR_BASE_MS = Date.UTC(2100, 0, 1);
 const RUN_ANCHOR_SPAN_HOURS = 900 * 365 * 24;
 const runAnchor =
   CALENDAR_BASE_MS + randomInt(0, RUN_ANCHOR_SPAN_HOURS) * 60 * 60 * 1000;
-
-interface ErrorEnvelope {
-  error: { code: string; message: string };
-}
-
-function isErrorEnvelope(value: unknown): value is ErrorEnvelope {
-  if (typeof value !== 'object' || value === null || !('error' in value))
-    return false;
-  const { error } = value as { error: unknown };
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    typeof (error as { code: unknown }).code === 'string'
-  );
-}
-
-function errorCodeOf(body: unknown): string | null {
-  return isErrorEnvelope(body) ? body.error.code : null;
-}
-
-async function login(email: string): Promise<string> {
-  const loginBody: LoginInput = { email, password: DEMO_PASSWORD };
-  const response = await fetch(`${BASE_URL}/api/auth/login`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(loginBody),
-  });
-
-  if (!response.ok) {
-    const json: unknown = await response.json().catch(() => null);
-    throw new Error(
-      `Login failed for ${email}: HTTP ${response.status} ${errorCodeOf(json) ?? ''}`,
-    );
-  }
-
-  // The route sets exactly one cookie (the session JWT) — see
-  // src/server/auth/session.ts. Only the "name=value" pair belongs in a
-  // Cookie request header, not the Path/HttpOnly/SameSite attributes
-  // Set-Cookie also carries.
-  const setCookie = response.headers.getSetCookie().at(0);
-  if (setCookie === undefined) {
-    throw new Error(`Login for ${email} did not set a session cookie`);
-  }
-  const cookiePair = setCookie.split(';')[0];
-  if (cookiePair === undefined) {
-    throw new Error(`Could not parse session cookie for ${email}`);
-  }
-  return cookiePair;
-}
-
-async function fetchRoomId(): Promise<string> {
-  const response = await fetch(`${BASE_URL}/api/rooms`);
-  if (!response.ok) {
-    throw new Error(`Failed to list rooms: HTTP ${response.status}`);
-  }
-
-  const json: unknown = await response.json();
-  const rooms = (json as { data?: unknown }).data;
-  if (!Array.isArray(rooms) || rooms.length === 0) {
-    throw new Error(
-      'No rooms found — run `yarn db:seed` against the target database first.',
-    );
-  }
-  const room = rooms[0] as { id?: unknown };
-  if (typeof room.id !== 'string') {
-    throw new Error('Unexpected shape from GET /api/rooms');
-  }
-  return room.id;
-}
 
 function windowForRound(round: number): { startsAt: string; endsAt: string } {
   const startsAt = new Date(runAnchor + round * ROUND_SPACING_MS);

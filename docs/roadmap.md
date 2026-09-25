@@ -305,7 +305,7 @@ Implement cancel/shorten per .claude/rules/booking-domain.md and .claude/rules/s
 **Verify:** run the ownership verification script, confirm cancelling frees the slot
 immediately.
 
-- [ ] Done
+- [x] Done
 
 ## Phase 15 — Frontend: cancel & shorten (My bookings)
 
@@ -324,7 +324,7 @@ Build "My bookings" in src/app/(app)/:
 **Verify:** cancel a booking and confirm the slot is immediately bookable again in the search
 page from Phase 8; try to shorten an already-ended booking and see the clear error.
 
-- [ ] Done
+- [x] Done
 
 ## Phase 16 — Recurring bookings (backend)
 

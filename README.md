@@ -104,13 +104,28 @@ curl -b cookies.txt -X POST localhost:3000/api/bookings \
   -d '{"roomId":"<id>","startsAt":"2026-10-01T10:30:00.000Z","endsAt":"2026-10-01T11:30:00.000Z"}'
 # 409 ROOM_ALREADY_BOOKED — same room, overlapping window
 
-curl -b cookies.txt localhost:3000/api/bookings          # your own bookings, cursor-paginated
+curl -b cookies.txt localhost:3000/api/bookings          # your own bookings, page-paginated
 curl -b cookies.txt localhost:3000/api/bookings/<id>      # 403 if it isn't yours, 404 if it doesn't exist
 ```
 
 Every overlapping request is rejected by the `bookings_no_overlap` exclusion constraint, never
 by an application-level check — see [ADR 0001](./docs/adr/0001-double-booking-prevention.md).
 A rejected attempt still writes a `BOOKING_REJECTED_OVERLAP` audit row.
+
+```bash
+curl -b cookies.txt -X PATCH localhost:3000/api/bookings/<id> \
+  -H 'Content-Type: application/json' -d '{"endsAt":"2026-10-01T10:30:00.000Z"}'
+# 200 — shorten only; moving endsAt later is 400 VALIDATION_FAILED
+
+curl -i -b cookies.txt -X DELETE localhost:3000/api/bookings/<id>
+# 204 — cancels this booking; the row is never deleted, so it stays in your booking history
+```
+
+Only the owning user can cancel or shorten their own booking — guessing someone else's id
+returns `403 FORBIDDEN`, checked against the session, never an id from the request (see
+"Documented decisions" for the exact time/status rules). Cancelling frees the slot immediately:
+the exclusion constraint is partial on `status = 'CONFIRMED'`, so a cancelled booking stops
+counting the moment its status flips, in the same commit — no separate invalidation step.
 
 ## Concurrency verification
 
@@ -134,6 +149,21 @@ working as intended, not a bug in the script.
 Every booking and audit row the run creates is deleted again before the process exits, whether
 the run passed or failed, so it's safe to run repeatedly against a real dev database without
 piling up throwaway data — see `cleanUp()` in the script.
+
+## Ownership verification
+
+Proves guessing someone else's booking id never works, on every single-booking route, not just
+the happy path:
+
+```bash
+yarn verify:ownership
+```
+
+Creates one booking as `alice@example.com`, then attempts to read, shorten and cancel it as
+`john@example.com` — every attempt must come back `403 FORBIDDEN`, the booking must be
+genuinely unchanged afterward, and the real owner's own cancel must still succeed (proving the
+403s are ownership working, not the routes being broken outright). Cleans up the booking it
+creates before exiting either way.
 
 ## Environment variables
 
@@ -183,12 +213,34 @@ VALIDATION_FAILED`, not a distinct code, since either way the caller sent a room
   role table, booking is a user action — admins manage the room catalogue and view utilisation,
   they don't book rooms themselves. `withRoute(handler, { role: 'USER' })` gates
   `POST /api/bookings` the same generic way `{ role: 'ADMIN' }` gates the admin routes.
-- **`GET /api/bookings` keeps real keyset (cursor) pagination**, ordered by `startsAt desc, id
-desc` — the one collection the room-listings decision above explicitly carves out, being
-  scoped to one caller and, unlike the room catalogue, expected to keep growing. The cursor is
-  an opaque token encoding `(startsAt, id)`, not just `id`: `startsAt` alone isn't unique (two
-  bookings, even for different rooms, can start at the same instant), so an id-only cursor would
-  risk skipping or repeating a row at a page boundary — the exact failure mode
-  [Phase 9](./docs/roadmap.md) exists to teach avoiding.
-- Still to resolve in later phases: shortening an already-started booking, the all-or-nothing
-  recurring series rule, and the bookable window used by the utilisation view.
+- **`GET /api/bookings` paginates by page number**, like the room listings (`page`/`pageSize`
+  query params, a `page`/`pageSize`/`totalItems`/`totalPages` response), so "My bookings" can
+  show real page numbers through the same `RoomPagination` component the room listings use.
+  This supersedes an earlier keyset-cursor design for this endpoint (see git history) — a
+  deliberate reversal once the UI needed visible page numbers, not "load more".
+- **`GET /api/bookings` sorts your next meeting to the top, not just by start time.** CONFIRMED
+  bookings that haven't ended yet come first, soonest start first (so an already-started one
+  sorts ahead of ones that haven't started, since its `startsAt` is earlier) — everything else
+  (cancelled, or already ended, regardless of which happened first) follows, most recently
+  relevant first. A cancelled booking with a future `startsAt` is _not_ "upcoming" — it's
+  grouped with the past/done bucket, not the top one; that's a deliberate reading of "your
+  bookings" as "what still matters to your schedule," not a literal date sort. This is two
+  partitions of one logical list sorted in _opposite_ directions — page-number pagination has to
+  slice one window out of their concatenation without ever using `$queryRaw`: `booking.repository.ts`
+  runs a `count()` + `findMany()` per partition (skipped entirely for a partition a given page
+  doesn't overlap), works out in plain arithmetic how much of the requested page falls in each,
+  and concatenates the results — no raw SQL, at the cost of up to four query-builder calls per
+  page instead of one. Verified by hand-seeding a dataset with several `startsAt` ties spanning
+  the boundary and walking every page at a small page size, confirming it matches a single
+  unpaginated fetch row-for-row.
+- **An already-started booking can be shortened, but only to `now()` or later.** You can end a
+  meeting early; you cannot retroactively unbook time you've already occupied. Anything earlier
+  than `now()` is `409 BOOKING_NOT_MODIFIABLE`, not `400` — the request is well-formed, it's just
+  refused by a time rule, same status/code family as the double-booking rejection.
+- **An already-_cancelled_ booking can't be cancelled or shortened again** (`409
+BOOKING_NOT_MODIFIABLE`). Not spelled out explicitly in the spec — a cancelled booking can
+  still have a future `endsAt`, so "already ended" alone doesn't cover it — but re-cancelling
+  (moving `cancelledAt` forward every time) or shortening a cancelled booking clearly isn't what
+  the shorten/cancel rules intend.
+- Still to resolve in later phases: the all-or-nothing recurring series rule, and the bookable
+  window used by the utilisation view.
