@@ -343,7 +343,7 @@ Implement recurring series per .claude/rules/booking-domain.md:
 
 **Verify:** book an 8-week series, cancel week 3 only, confirm weeks 1-2 and 4-8 are untouched.
 
-- [ ] Done
+- [x] Done
 
 ## Phase 17 — Frontend: recurring booking
 
@@ -362,7 +362,7 @@ Add a "recurring" option to the booking flow from Phase 12:
 conflict is shown clearly and nothing partial was booked; cancel one occurrence from "My
 bookings" and confirm the rest of the series is untouched.
 
-- [ ] Done
+- [x] Done
 
 ## Phase 18 — Utilisation view (backend)
 

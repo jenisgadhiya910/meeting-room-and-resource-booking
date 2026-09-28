@@ -2,8 +2,8 @@
 
 import { useState } from 'react';
 
-import { ApiError, apiFetch } from '@/lib/api-client';
-import { formatDateTimeRange } from '@/lib/format';
+import { ApiError, apiFetch, specificMessage } from '@/lib/api-client';
+import { formatDateTimeRange, timeInputValue } from '@/lib/format';
 import {
   dangerButtonClassName,
   inputClassName,
@@ -19,15 +19,6 @@ interface Props {
   booking: ClientBooking;
   onCancelled: (bookingId: string) => void;
   onShortened: (booking: ClientBooking) => void;
-}
-
-// The same HH:MM shape a native <input type="time"> reads and writes, in
-// the booking's own end date's local time.
-function timeInputValue(iso: string): string {
-  const date = new Date(iso);
-  return `${String(date.getHours()).padStart(2, '0')}:${String(
-    date.getMinutes(),
-  ).padStart(2, '0')}`;
 }
 
 function parseTimeInput(
@@ -53,7 +44,7 @@ function messageFor(error: ApiError): string {
     case 'UNAUTHENTICATED':
       return 'Your session has expired. Please log in again.';
     default:
-      return error.message;
+      return specificMessage(error);
   }
 }
 

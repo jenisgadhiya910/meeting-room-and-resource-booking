@@ -13,8 +13,10 @@ import { create, list } from '@/server/modules/booking/booking.service';
 export const POST = withRoute(
   async ({ request, user, requestId }) => {
     const body = createBookingSchema.parse(await request.json());
-    const booking = await create({ ...body, actorId: user.id, requestId });
-    return created(booking);
+    const result = await create({ ...body, actorId: user.id, requestId });
+    return result.kind === 'single'
+      ? created(result.booking)
+      : created({ series: result.series, occurrences: result.occurrences });
   },
   { role: 'USER' },
 );

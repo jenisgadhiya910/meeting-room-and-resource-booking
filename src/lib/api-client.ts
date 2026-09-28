@@ -35,6 +35,38 @@ function isErrorEnvelope(value: unknown): value is { error: ApiErrorBody } {
   );
 }
 
+// z.flattenError()'s shape (see with-route.ts's ZodError branch): the first
+// specific reason available, from either bucket.
+function firstValidationDetail(details: unknown): string | null {
+  if (typeof details !== 'object' || details === null) return null;
+  const { formErrors, fieldErrors } = details as {
+    formErrors?: unknown;
+    fieldErrors?: unknown;
+  };
+  if (Array.isArray(formErrors) && typeof formErrors[0] === 'string') {
+    return formErrors[0];
+  }
+  if (typeof fieldErrors === 'object' && fieldErrors !== null) {
+    for (const value of Object.values(fieldErrors)) {
+      if (Array.isArray(value) && typeof value[0] === 'string') return value[0];
+    }
+  }
+  return null;
+}
+
+/**
+ * The specific reason behind an error, not just `error.message` — for a
+ * genuine zod parse failure caught by withRoute's ZodError branch,
+ * `message` is always the generic "Validation failed"; the actually useful
+ * text lives in `details.fieldErrors`/`formErrors` instead (api-routes.md's
+ * error envelope). A service-thrown domain error (e.g. ValidationError with
+ * its own message, or any other code) already has a specific `message`, so
+ * this only overrides it when there's something more specific to say.
+ */
+export function specificMessage(error: ApiError): string {
+  return firstValidationDetail(error.details) ?? error.message;
+}
+
 /**
  * Thin fetch wrapper for our own API. It only standardises the *error* side
  * of api-routes.md's envelope, since that's the one shape every route

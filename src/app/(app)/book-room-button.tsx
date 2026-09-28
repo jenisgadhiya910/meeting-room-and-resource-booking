@@ -2,7 +2,8 @@
 
 import { useState } from 'react';
 
-import { ApiError, apiFetch } from '@/lib/api-client';
+import { RecurringBookingForm } from './recurring-booking-form';
+import { ApiError, apiFetch, specificMessage } from '@/lib/api-client';
 import { formatDateTimeRange } from '@/lib/format';
 import { primaryButtonClassName, secondaryButtonClassName } from '@/lib/ui';
 
@@ -18,7 +19,7 @@ interface Props {
   onSearchAgain: () => void;
 }
 
-type Step = 'idle' | 'confirming' | 'booking' | 'booked';
+type Step = 'idle' | 'confirming' | 'booking' | 'booked' | 'recurring';
 
 interface BookingError {
   code: string;
@@ -27,8 +28,9 @@ interface BookingError {
 
 // Surfaces the specific failure the roadmap calls out (409 conflict) rather
 // than a generic message, and gives every other code a sensible one too —
-// falling back to the server's own message for anything not called out
-// here (e.g. VALIDATION_FAILED already reads fine as-is).
+// falling back to the server's own message (or, for a genuine zod parse
+// failure, the specific field reason nested in details — see
+// specificMessage) for anything not called out here.
 function messageFor(error: ApiError): string {
   switch (error.code) {
     case 'ROOM_ALREADY_BOOKED':
@@ -38,7 +40,7 @@ function messageFor(error: ApiError): string {
     case 'FORBIDDEN':
       return "You don't have permission to book a room.";
     default:
-      return error.message;
+      return specificMessage(error);
   }
 }
 
@@ -77,6 +79,11 @@ export function BookRoomButton({
     setStep('confirming');
   }
 
+  function handleBookWeeklyClick(): void {
+    setError(null);
+    setStep('recurring');
+  }
+
   function handleCancelClick(): void {
     setStep('idle');
   }
@@ -95,6 +102,17 @@ export function BookRoomButton({
       <p className="text-sm font-medium text-green-600 dark:text-green-400">
         ✓ Booked
       </p>
+    );
+  }
+
+  if (step === 'recurring') {
+    return (
+      <RecurringBookingForm
+        roomId={roomId}
+        startsAt={startsAt}
+        endsAt={endsAt}
+        onCancel={handleCancelClick}
+      />
     );
   }
 
@@ -128,13 +146,22 @@ export function BookRoomButton({
 
   return (
     <div className="flex flex-col items-end gap-2 text-right">
-      <button
-        type="button"
-        onClick={handleBookClick}
-        className={primaryButtonClassName}
-      >
-        Book
-      </button>
+      <div className="flex gap-2">
+        <button
+          type="button"
+          onClick={handleBookClick}
+          className={primaryButtonClassName}
+        >
+          Book
+        </button>
+        <button
+          type="button"
+          onClick={handleBookWeeklyClick}
+          className={secondaryButtonClassName}
+        >
+          Book weekly
+        </button>
+      </div>
 
       {error ? (
         <div>

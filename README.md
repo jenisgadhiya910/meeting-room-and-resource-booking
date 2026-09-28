@@ -127,6 +127,27 @@ returns `403 FORBIDDEN`, checked against the session, never an id from the reque
 the exclusion constraint is partial on `status = 'CONFIRMED'`, so a cancelled booking stops
 counting the moment its status flips, in the same commit — no separate invalidation step.
 
+```bash
+curl -b cookies.txt -X POST localhost:3000/api/bookings \
+  -H 'Content-Type: application/json' \
+  -d '{"roomId":"<id>","recurrence":{"weekday":2,"localStartTime":"10:00","localEndTime":"11:00","timezone":"Asia/Kolkata","occurrenceCount":8}}'
+# 201 — { series, occurrences: [...] }. weekday: 0=Sun..6=Sat. First occurrence is the next
+# Tuesday whose 10:00 hasn't happened yet; each later one is exactly 7 local days after that,
+# so the series stays at 10:00 local even across a DST boundary in `timezone`.
+
+curl -i -b cookies.txt -X DELETE localhost:3000/api/booking-series/<seriesId>
+# 204 — cancels every remaining CONFIRMED, not-yet-ended occurrence; past/already-ended ones,
+# and any occurrence already cancelled individually, are left exactly as they were.
+```
+
+The same POST endpoint handles both shapes — a `recurrence` object in the body means recurring,
+its absence means single. A recurring request is all-or-nothing: if _any_ occurrence in the
+series would collide, the whole thing is rejected with `409 ROOM_ALREADY_BOOKED` and
+`details.conflicts` listing every colliding occurrence and what it clashed with — not just the
+first one found — and nothing partial is ever booked. `DELETE /api/bookings/:id` still cancels
+one occurrence without touching the rest of its series; an occurrence is just a `bookings` row
+with `seriesId` set, identical in every other respect to a one-off booking.
+
 ## Concurrency verification
 
 The headline demo — proves two truly simultaneous overlapping booking requests can never both
@@ -242,5 +263,32 @@ BOOKING_NOT_MODIFIABLE`). Not spelled out explicitly in the spec — a cancelled
   still have a future `endsAt`, so "already ended" alone doesn't cover it — but re-cancelling
   (moving `cancelledAt` forward every time) or shortening a cancelled booking clearly isn't what
   the shorten/cancel rules intend.
-- Still to resolve in later phases: the all-or-nothing recurring series rule, and the bookable
-  window used by the utilisation view.
+- **A recurring series is all-or-nothing.** If any occurrence in the requested series would
+  collide with an existing booking, the whole series is rejected with `409 ROOM_ALREADY_BOOKED`
+  and `details.conflicts` listing every clashing occurrence and what it clashed with — nothing
+  partial is ever booked. The exclusion constraint can only ever report the first collision it
+  happens to hit, one at a time, so `booking.service.ts` runs a pre-check query across all N
+  occurrences first to build that full list, then still creates the series through the same
+  constraint-backed transaction the pre-check is not a substitute for (ADR 0001) — ending up
+  with a real conflict at that point (a race the pre-check couldn't have seen) re-runs the same
+  full check after rollback, same "fresh read after a failed transaction" shape the single-
+  booking path already uses. The alternative — book what fits, report the rest — is defensible
+  too; switching to it means updating this note.
+- **A brand-new series' first occurrence is never something already in progress or past.**
+  Not spelled out in the spec: given only a weekday, time and occurrence count (no explicit
+  start date — see the frontend form in a later phase), the first occurrence is the next date
+  matching that weekday whose start time hasn't happened yet, skipping forward a further week
+  if today matches but the time already has. Every later occurrence is exactly 7 _local_ days
+  after that, converted to UTC fresh per occurrence (not by adding 7×24h to a UTC instant), so
+  the series stays pinned to the same local clock time across a DST transition in the series'
+  own timezone — verified by hand against a real `America/New_York` series spanning the Nov
+  2026 fall-back boundary.
+- **Recurring-series timezone conversion uses one `Intl.DateTimeFormat` correction pass, not
+  iterated to convergence.** No date library was added for this (`booking-recurrence.ts`) —
+  before adding one, CLAUDE.md asks what it replaces and why the standard library won't do, and
+  a single correction pass is exact everywhere except inside the DST transition window itself
+  (at most an hour, at most twice a year, only for whichever timezone is configured), which is
+  an acceptable gap for this POC.
+- **A recurring series is capped at 52 occurrences.** A year of weekly bookings is already a
+  lot for one request; this POC doesn't support an open-ended series.
+- Still to resolve in a later phase: the bookable window used by the utilisation view.

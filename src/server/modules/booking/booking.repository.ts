@@ -11,6 +11,11 @@ export interface BookingSummary {
   id: string;
   roomId: string | null;
   userId: string;
+  // Null for a one-off booking, set for one occurrence of a recurring
+  // series — the two are otherwise identical rows (booking-domain.md: "A
+  // one-off booking is a bookings row with seriesId = null... Nothing else
+  // in the system needs to know the difference").
+  seriesId: string | null;
   startsAt: Date;
   endsAt: Date;
   status: BookingStatus;
@@ -29,6 +34,7 @@ const bookingSelect = {
   id: true,
   roomId: true,
   userId: true,
+  seriesId: true,
   startsAt: true,
   endsAt: true,
   status: true,
@@ -44,6 +50,7 @@ function toSummary(row: BookingRow): BookingSummary {
     id: row.id,
     roomId: row.roomId,
     userId: row.userId,
+    seriesId: row.seriesId,
     startsAt: row.startsAt,
     endsAt: row.endsAt,
     status: row.status,
@@ -152,6 +159,266 @@ export async function writeRejectedOverlapAudit(
         endsAt: conflict.endsAt.toISOString(),
       })),
     },
+  });
+}
+
+export interface SeriesConflict {
+  occurrenceStartsAt: Date;
+  occurrenceEndsAt: Date;
+  conflicts: ConflictingBooking[];
+}
+
+// One query for every occurrence's overlap check, not one query per
+// occurrence — `OR` one overlap predicate per occurrence, then sort the
+// (typically tiny) result back out per occurrence in application code.
+// Called both as the pre-check before attempting the transaction, and
+// again after a rollback to build an accurate details.conflicts on the
+// rare race where the pre-check passed but a concurrent write beat this
+// series to it — same "fresh read after rollback" shape as
+// findConflictingBookings above, just batched over N occurrences.
+export async function findSeriesConflicts(
+  roomId: string,
+  occurrences: { startsAt: Date; endsAt: Date }[],
+): Promise<SeriesConflict[]> {
+  if (occurrences.length === 0) return [];
+
+  const candidates = await prisma.booking.findMany({
+    where: {
+      roomId,
+      status: 'CONFIRMED',
+      OR: occurrences.map((occurrence) => ({
+        startsAt: { lt: occurrence.endsAt },
+        endsAt: { gt: occurrence.startsAt },
+      })),
+    },
+    select: { id: true, startsAt: true, endsAt: true },
+    orderBy: { startsAt: 'asc' },
+  });
+
+  const conflicts: SeriesConflict[] = [];
+  for (const occurrence of occurrences) {
+    const overlapping = candidates.filter(
+      (candidate) =>
+        candidate.startsAt < occurrence.endsAt &&
+        candidate.endsAt > occurrence.startsAt,
+    );
+    if (overlapping.length > 0) {
+      conflicts.push({
+        occurrenceStartsAt: occurrence.startsAt,
+        occurrenceEndsAt: occurrence.endsAt,
+        conflicts: overlapping,
+      });
+    }
+  }
+  return conflicts;
+}
+
+export interface RejectedSeriesOverlapAuditParams {
+  actorId: string;
+  roomId: string;
+  requestId: string;
+  conflicts: SeriesConflict[];
+}
+
+export async function writeRejectedSeriesOverlapAudit(
+  params: RejectedSeriesOverlapAuditParams,
+): Promise<void> {
+  await writeAuditEvent(prisma, {
+    actorId: params.actorId,
+    action: 'BOOKING_REJECTED_OVERLAP',
+    outcome: 'REJECTED',
+    roomId: params.roomId,
+    bookingId: null,
+    requestId: params.requestId,
+    payload: {
+      conflicts: params.conflicts.map((conflict) => ({
+        occurrenceStartsAt: conflict.occurrenceStartsAt.toISOString(),
+        occurrenceEndsAt: conflict.occurrenceEndsAt.toISOString(),
+        conflicts: conflict.conflicts.map((c) => ({
+          id: c.id,
+          startsAt: c.startsAt.toISOString(),
+          endsAt: c.endsAt.toISOString(),
+        })),
+      })),
+    },
+  });
+}
+
+export interface SeriesSummary {
+  id: string;
+  roomId: string | null;
+  userId: string;
+  weekday: number;
+  localStartMinutes: number;
+  localEndMinutes: number;
+  timezone: string;
+  occurrenceCount: number;
+  createdAt: Date;
+}
+
+const seriesSelect = {
+  id: true,
+  roomId: true,
+  userId: true,
+  weekday: true,
+  localStartMinutes: true,
+  localEndMinutes: true,
+  timezone: true,
+  occurrenceCount: true,
+  createdAt: true,
+} satisfies Prisma.BookingSeriesSelect;
+
+type SeriesRow = Prisma.BookingSeriesGetPayload<{
+  select: typeof seriesSelect;
+}>;
+
+function toSeriesSummary(row: SeriesRow): SeriesSummary {
+  return { ...row };
+}
+
+export interface CreateSeriesParams {
+  roomId: string;
+  userId: string;
+  weekday: number;
+  localStartMinutes: number;
+  localEndMinutes: number;
+  timezone: string;
+  occurrenceCount: number;
+  occurrences: { startsAt: Date; endsAt: Date }[];
+  roomSnapshot: RoomSnapshot;
+  requestId: string;
+}
+
+export interface CreatedSeries {
+  series: SeriesSummary;
+  occurrences: BookingSummary[];
+}
+
+// One booking_series row plus N bookings rows, all inside one transaction
+// — all-or-nothing (booking-domain.md): if any occurrence's INSERT hits
+// the exclusion constraint, the whole transaction (series row included)
+// rolls back together. Occurrences are inserted one at a time with
+// sequential awaits, not Promise.all — they share this one transaction's
+// single connection, and Prisma's interactive transactions don't support
+// concurrent queries against the same tx (typescript.md: "Do not
+// Promise.all over writes that must share a transaction").
+export async function createSeries(
+  params: CreateSeriesParams,
+): Promise<CreatedSeries> {
+  return prisma.$transaction(async (tx) => {
+    const series = await tx.bookingSeries.create({
+      data: {
+        roomId: params.roomId,
+        userId: params.userId,
+        weekday: params.weekday,
+        localStartMinutes: params.localStartMinutes,
+        localEndMinutes: params.localEndMinutes,
+        timezone: params.timezone,
+        occurrenceCount: params.occurrenceCount,
+      },
+      select: seriesSelect,
+    });
+
+    const occurrenceRows: BookingRow[] = [];
+    for (const occurrence of params.occurrences) {
+      const booking = await tx.booking.create({
+        data: {
+          roomId: params.roomId,
+          userId: params.userId,
+          seriesId: series.id,
+          startsAt: occurrence.startsAt,
+          endsAt: occurrence.endsAt,
+          roomSnapshot: params.roomSnapshot,
+        },
+        select: bookingSelect,
+      });
+      occurrenceRows.push(booking);
+    }
+
+    // One event for the whole series, not one per occurrence — mirrors
+    // SERIES_CREATED/SERIES_CANCELLED being their own AuditAction values,
+    // distinct from per-occurrence BOOKING_CREATED (security-and-audit.md).
+    await writeAuditEvent(tx, {
+      actorId: params.userId,
+      action: 'SERIES_CREATED',
+      outcome: 'SUCCESS',
+      roomId: params.roomId,
+      bookingId: null,
+      requestId: params.requestId,
+      payload: {
+        seriesId: series.id,
+        occurrenceCount: params.occurrenceCount,
+        occurrences: params.occurrences.map((o) => ({
+          startsAt: o.startsAt.toISOString(),
+          endsAt: o.endsAt.toISOString(),
+        })),
+      },
+    });
+
+    return {
+      series: toSeriesSummary(series),
+      occurrences: occurrenceRows.map(toSummary),
+    };
+  });
+}
+
+export async function findSeriesById(
+  id: string,
+): Promise<SeriesSummary | null> {
+  const row = await prisma.bookingSeries.findUnique({
+    where: { id },
+    select: seriesSelect,
+  });
+  return row ? toSeriesSummary(row) : null;
+}
+
+export interface CancelSeriesParams {
+  seriesId: string;
+  actorId: string;
+  requestId: string;
+  roomId: string | null;
+}
+
+// "Cancels the remaining future occurrences and leaves past ones intact"
+// (booking-domain.md) — "future" here means the same `endsAt > now()` line
+// every other time-based rule in this module uses, not `startsAt > now()`:
+// an in-progress occurrence is still "remaining", not yet done. One
+// updateMany, not N individual updates with N audit rows — one
+// SERIES_CANCELLED event lists which booking ids it touched.
+export async function cancelRemainingOccurrences(
+  params: CancelSeriesParams,
+): Promise<{ cancelledIds: string[] }> {
+  const now = new Date();
+
+  return prisma.$transaction(async (tx) => {
+    const toCancel = await tx.booking.findMany({
+      where: {
+        seriesId: params.seriesId,
+        status: 'CONFIRMED',
+        endsAt: { gt: now },
+      },
+      select: { id: true },
+    });
+    const cancelledIds = toCancel.map((booking) => booking.id);
+
+    if (cancelledIds.length > 0) {
+      await tx.booking.updateMany({
+        where: { id: { in: cancelledIds } },
+        data: { status: 'CANCELLED', cancelledAt: now },
+      });
+    }
+
+    await writeAuditEvent(tx, {
+      actorId: params.actorId,
+      action: 'SERIES_CANCELLED',
+      outcome: 'SUCCESS',
+      roomId: params.roomId,
+      bookingId: null,
+      requestId: params.requestId,
+      payload: { seriesId: params.seriesId, cancelledBookingIds: cancelledIds },
+    });
+
+    return { cancelledIds };
   });
 }
 

@@ -1,12 +1,27 @@
 import { ConflictError } from '@/server/http/errors';
 
-import type { ConflictingBooking } from './booking.repository';
+import type { ConflictingBooking, SeriesConflict } from './booking.repository';
 
 export class RoomAlreadyBookedError extends ConflictError {
   constructor(conflicts: ConflictingBooking[]) {
     super(
       'ROOM_ALREADY_BOOKED',
       'This room is already booked for part of the requested time',
+      { conflicts },
+    );
+  }
+}
+
+// Same code as the single-booking conflict — it's the same underlying
+// reason (the room's already booked for part of the requested time) — but
+// `details.conflicts` is shaped per occurrence, not a flat list, per
+// booking-domain.md's "All-or-nothing": "the whole series is rejected with
+// 409 and details.conflicts listing which dates clashed and with what."
+export class SeriesAlreadyBookedError extends ConflictError {
+  constructor(conflicts: SeriesConflict[]) {
+    super(
+      'ROOM_ALREADY_BOOKED',
+      'This room is already booked for part of the requested series',
       { conflicts },
     );
   }

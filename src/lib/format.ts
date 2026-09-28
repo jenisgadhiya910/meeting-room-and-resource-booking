@@ -11,3 +11,12 @@ export function formatDateTimeRange(startsAt: string, endsAt: string): string {
   const endText = end.toLocaleTimeString(undefined, { timeStyle: 'short' });
   return `${startText} – ${endText}`;
 }
+
+// The same HH:MM shape a native <input type="time"> reads and writes, in
+// the instant's browser-local time.
+export function timeInputValue(iso: string): string {
+  const date = new Date(iso);
+  return `${String(date.getHours()).padStart(2, '0')}:${String(
+    date.getMinutes(),
+  ).padStart(2, '0')}`;
+}

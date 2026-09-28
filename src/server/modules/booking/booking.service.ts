@@ -8,24 +8,37 @@ import {
 } from '@/server/http/errors';
 import { getRoomById } from '@/server/modules/room/room.service';
 
+import { generateOccurrences, parseLocalTime } from './booking-recurrence';
 import {
   BookingNotModifiableError,
   RoomAlreadyBookedError,
+  SeriesAlreadyBookedError,
 } from './booking.errors';
 import {
   cancelBooking as cancelBookingRepo,
+  cancelRemainingOccurrences,
   createBooking as createBookingRepo,
+  createSeries as createSeriesRepo,
   findById as findByIdRepo,
   findConflictingBookings,
+  findSeriesById,
+  findSeriesConflicts,
   listByUser as listByUserRepo,
   shortenBooking as shortenBookingRepo,
   writeRejectedOverlapAudit,
+  writeRejectedSeriesOverlapAudit,
 } from './booking.repository';
 
-import type { BookingPage, BookingSummary } from './booking.repository';
+import type {
+  BookingPage,
+  BookingSummary,
+  CreatedSeries,
+  SeriesSummary,
+} from './booking.repository';
 import type {
   BookingListPagination,
-  CreateBookingInput,
+  CreateRecurringBookingInput,
+  CreateSingleBookingInput,
   ShortenBookingInput,
 } from './booking.schema';
 
@@ -78,12 +91,15 @@ function isOverlapViolation(error: unknown): boolean {
 // a write conflict or a deadlock. Please retry your transaction"), not
 // P2039. Confirmed against this exact stack by scripts/verify-concurrency.ts
 // itself: with 20 genuinely simultaneous rounds, one round's loser got
-// P2034 instead of a clean overlap violation. Retrying the *same* insert
+// P2034 instead of a clean overlap violation. Retrying the *same* write
 // isn't the forbidden check-then-insert shortcut — the exclusion constraint
 // is still the only thing deciding the outcome; this just gives Postgres a
 // second attempt once the other transaction has actually committed or
 // rolled back, at which point the retry deterministically sees a normal,
-// cleanly-detected 23P01.
+// cleanly-detected 23P01. Shared by single and series creation — a series'
+// whole transaction (booking_series row included) is retried from scratch,
+// not just the failing occurrence, since a P2034 aborts the transaction
+// entirely regardless of which statement hit it.
 const MAX_CREATE_ATTEMPTS = 3;
 
 function isTransientWriteConflict(error: unknown): boolean {
@@ -93,12 +109,10 @@ function isTransientWriteConflict(error: unknown): boolean {
   );
 }
 
-async function createBookingWithRetry(
-  input: Parameters<typeof createBookingRepo>[0],
-): Promise<BookingSummary> {
+async function withTransientRetry<T>(operation: () => Promise<T>): Promise<T> {
   for (let attempt = 1; attempt <= MAX_CREATE_ATTEMPTS; attempt += 1) {
     try {
-      return await createBookingRepo(input);
+      return await operation();
     } catch (error: unknown) {
       if (isTransientWriteConflict(error) && attempt < MAX_CREATE_ATTEMPTS)
         continue;
@@ -112,13 +126,13 @@ async function createBookingWithRetry(
   throw new Error('unreachable');
 }
 
-export interface CreateBookingParams extends CreateBookingInput {
+export interface CreateSingleBookingParams extends CreateSingleBookingInput {
   actorId: string;
   requestId: string;
 }
 
-export async function create(
-  params: CreateBookingParams,
+async function createSingleBooking(
+  params: CreateSingleBookingParams,
 ): Promise<BookingSummary> {
   // Not a pre-validation query — the room's current name/location/capacity/
   // equipment are genuinely needed for roomSnapshot, so this fetch earns its
@@ -131,19 +145,21 @@ export async function create(
   const endsAt = new Date(params.endsAt);
 
   try {
-    return await createBookingWithRetry({
-      roomId: params.roomId,
-      userId: params.actorId,
-      startsAt,
-      endsAt,
-      roomSnapshot: {
-        name: room.name,
-        location: room.location,
-        capacity: room.capacity,
-        equipment: room.equipment,
-      },
-      requestId: params.requestId,
-    });
+    return await withTransientRetry(() =>
+      createBookingRepo({
+        roomId: params.roomId,
+        userId: params.actorId,
+        startsAt,
+        endsAt,
+        roomSnapshot: {
+          name: room.name,
+          location: room.location,
+          capacity: room.capacity,
+          equipment: room.equipment,
+        },
+        requestId: params.requestId,
+      }),
+    );
   } catch (error: unknown) {
     if (!isOverlapViolation(error)) throw error;
 
@@ -162,6 +178,109 @@ export async function create(
     });
     throw new RoomAlreadyBookedError(conflicts);
   }
+}
+
+export interface CreateRecurringBookingParams extends CreateRecurringBookingInput {
+  actorId: string;
+  requestId: string;
+}
+
+async function createSeries(
+  params: CreateRecurringBookingParams,
+): Promise<CreatedSeries> {
+  const room = await getRoomById(params.roomId);
+  if (!room || !room.active) throw new ValidationError('Unknown room id');
+
+  const occurrences = generateOccurrences({
+    weekday: params.recurrence.weekday,
+    localStartMinutes: parseLocalTime(params.recurrence.localStartTime),
+    localEndMinutes: parseLocalTime(params.recurrence.localEndTime),
+    timezone: params.recurrence.timezone,
+    occurrenceCount: params.recurrence.occurrenceCount,
+  });
+
+  // Pre-check, not a substitute for the constraint: with N occurrences,
+  // the exclusion constraint can only ever report the *first* one it
+  // happens to hit, one at a time — it can't hand back "these are all the
+  // dates that clash" the way booking-domain.md's all-or-nothing rule
+  // needs. This one query builds that full list up front so a doomed
+  // series never even starts a transaction; the transaction (below)
+  // remains what actually decides the outcome (ADR 0001: "a pre-check is
+  // only ever a fast path for a friendlier error message").
+  const preCheckConflicts = await findSeriesConflicts(
+    params.roomId,
+    occurrences,
+  );
+  if (preCheckConflicts.length > 0) {
+    await writeRejectedSeriesOverlapAudit({
+      actorId: params.actorId,
+      roomId: params.roomId,
+      requestId: params.requestId,
+      conflicts: preCheckConflicts,
+    });
+    throw new SeriesAlreadyBookedError(preCheckConflicts);
+  }
+
+  try {
+    return await withTransientRetry(() =>
+      createSeriesRepo({
+        roomId: params.roomId,
+        userId: params.actorId,
+        weekday: params.recurrence.weekday,
+        localStartMinutes: parseLocalTime(params.recurrence.localStartTime),
+        localEndMinutes: parseLocalTime(params.recurrence.localEndTime),
+        timezone: params.recurrence.timezone,
+        occurrenceCount: params.recurrence.occurrenceCount,
+        occurrences,
+        roomSnapshot: {
+          name: room.name,
+          location: room.location,
+          capacity: room.capacity,
+          equipment: room.equipment,
+        },
+        requestId: params.requestId,
+      }),
+    );
+  } catch (error: unknown) {
+    if (!isOverlapViolation(error)) throw error;
+
+    // Rare race: the pre-check passed, but a concurrent write landed in
+    // the gap between it and this transaction. Fresh read after rollback,
+    // same reasoning as the single-booking path.
+    const conflicts = await findSeriesConflicts(params.roomId, occurrences);
+    await writeRejectedSeriesOverlapAudit({
+      actorId: params.actorId,
+      roomId: params.roomId,
+      requestId: params.requestId,
+      conflicts,
+    });
+    throw new SeriesAlreadyBookedError(conflicts);
+  }
+}
+
+export type CreateBookingParams =
+  | (CreateSingleBookingInput & { actorId: string; requestId: string })
+  | (CreateRecurringBookingInput & { actorId: string; requestId: string });
+
+export type CreateBookingResult =
+  | { kind: 'single'; booking: BookingSummary }
+  | { kind: 'series'; series: SeriesSummary; occurrences: BookingSummary[] };
+
+// POST /api/bookings is "single or recurring" through one endpoint
+// (api-routes.md) — the request body's shape (a `recurrence` object or
+// not) decides which, matching createBookingSchema's union in
+// booking.schema.ts. The result is a discriminated union too, so the route
+// handler can map either shape to a response without doing any business
+// logic of its own — just picking which shape to wrap.
+export async function create(
+  params: CreateBookingParams,
+): Promise<CreateBookingResult> {
+  if ('recurrence' in params) {
+    const result = await createSeries(params);
+    return { kind: 'series', ...result };
+  }
+  const booking = await createSingleBooking(params);
+  return { kind: 'single', booking };
 }
 
 // Shared by every single-booking operation (read, cancel, shorten):
@@ -211,6 +330,12 @@ function assertModifiable(booking: BookingSummary, now: Date): void {
   }
 }
 
+// Cancels this one occurrence without touching the series it may belong
+// to — an occurrence is just a bookings row with seriesId set, identical
+// in every other respect to a one-off booking, so the existing single-
+// booking cancel logic already does exactly the right thing unmodified
+// (booking-domain.md: "Nothing else in the system needs to know the
+// difference").
 export async function cancel(
   bookingId: string,
   actorId: string,
@@ -258,4 +383,25 @@ export async function shorten(
     actorId,
     requestId,
   });
+}
+
+// Ownership checked the same way as a single booking (against the session
+// id, never an id from the request), just against booking_series.userId
+// instead of bookings.userId.
+export async function cancelSeries(
+  seriesId: string,
+  actorId: string,
+  requestId: string,
+): Promise<{ cancelledCount: number }> {
+  const series = await findSeriesById(seriesId);
+  if (!series) throw new NotFoundError('Booking series');
+  if (series.userId !== actorId) throw new ForbiddenError();
+
+  const { cancelledIds } = await cancelRemainingOccurrences({
+    seriesId,
+    actorId,
+    requestId,
+    roomId: series.roomId,
+  });
+  return { cancelledCount: cancelledIds.length };
 }
