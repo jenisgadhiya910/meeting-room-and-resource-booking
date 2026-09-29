@@ -156,6 +156,12 @@ model Booking {
   @@index([userId, startsAt])
   // Serves cancelling the remaining occurrences of a series.
   @@index([seriesId])
+  // Serves the utilisation aggregate's `"roomId" = $1 AND "startsAt" >= $2
+  // AND "startsAt" < $3` (GET /api/admin/utilisation?roomId=...). Neither
+  // existing index can seek on both: [userId, startsAt] leads with userId,
+  // and bookings_no_overlap is partial and range-typed. Measured — see
+  // utilisation.repository.ts.
+  @@index([roomId, startsAt])
   @@map("bookings")
 }
 

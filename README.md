@@ -148,6 +148,30 @@ first one found — and nothing partial is ever booked. `DELETE /api/bookings/:i
 one occurrence without touching the rest of its series; an occurrence is just a `bookings` row
 with `seriesId` set, identical in every other respect to a one-off booking.
 
+## Admin: utilisation
+
+```bash
+curl -b admin-cookies.txt \
+  'localhost:3000/api/admin/utilisation?roomId=<id>&from=2026-09-21&to=2026-10-18'
+# 200 — { data: [{ room, weeks: [{ weekStart, bookedMinutes, availableMinutes, bookingCount }],
+#   totals }], meta: { from, to, bookableWindow } }. Omit roomId for every room.
+```
+
+Admin only (`403 FORBIDDEN` for a `USER` session). `from`/`to` are calendar dates
+(`YYYY-MM-DD`, inclusive, at most 366 days apart) and select whole weeks. Every week in range is
+returned, including weeks with no bookings. Durations are integer minutes, so the UI divides by
+60 to show hours. Booked time is aggregated in one SQL query grouped by room and
+`date_trunc('week', "startsAt")`. When scoped to one room, the query uses
+`bookings_roomId_startsAt_idx`. The plan is explained in `utilisation.repository.ts`, and the
+rules are under "Documented decisions" below.
+
+In the browser, `/admin/utilisation` (the "Utilisation" nav link, admins only) shows every room
+against the selected weeks. Selecting a room name opens its week-by-week table of hours booked
+vs. available. The page checks the admin role server-side in its own `page.tsx`, not only in
+`admin/layout.tsx`, because Next.js layouts don't re-run on client-side navigation. A non-admin
+who opens the URL directly is redirected to `/` before any data is fetched, and the API refuses
+them with `403` regardless.
+
 ## Concurrency verification
 
 The headline demo — proves two truly simultaneous overlapping booking requests can never both
@@ -291,4 +315,21 @@ BOOKING_NOT_MODIFIABLE`). Not spelled out explicitly in the spec — a cancelled
   an acceptable gap for this POC.
 - **A recurring series is capped at 52 occurrences.** A year of weekly bookings is already a
   lot for one request; this POC doesn't support an open-ended series.
-- Still to resolve in a later phase: the bookable window used by the utilisation view.
+- **The utilisation view's "hours available" is 08:00–18:00, Monday to Friday, in UTC: 50 hours
+  (3000 minutes) per room per week.** It is defined once, as `BOOKABLE_WINDOW` in
+  `src/server/modules/utilisation/bookable-window.ts`. UTC matches how every timestamp is stored.
+  A single-site deployment would set its office zone there. Week boundaries are then computed in
+  that zone by Postgres (`date_trunc` + `AT TIME ZONE`, DST-aware). A DST change falls overnight,
+  outside the window, so the weekly total stays the same.
+- **Utilisation reports whole weeks (Monday start), not arbitrary instants.** `from`/`to` are
+  dates, and every week containing at least one day of `[from, to]` is included in full. This
+  gives every row the same denominator, so a partial first or last week can't look
+  under-utilised.
+- **A booking's full duration counts towards the week it _starts_ in**, per `date_trunc('week',
+"startsAt")`. A booking running across midnight Sunday is not split between weeks. Time booked
+  outside the bookable window (evenings, weekends) still counts as booked, because bookings
+  aren't restricted to the window. A week can therefore exceed 100% in principle. Only
+  `CONFIRMED` bookings count.
+- **Utilisation covers every room that still exists, active or not.** Each room's current
+  `active` flag is returned so the UI can mark it. Bookings whose room has since been deleted
+  (`roomId` is `null`) have no room to report against and are left out.

@@ -379,7 +379,7 @@ Run EXPLAIN on the aggregate query and walk me through whether the index is bein
 
 **Verify:** query across a date range, cross-check the summed hours by hand for one room/week.
 
-- [ ] Done
+- [x] Done
 
 ## Phase 19 — Frontend: admin utilisation
 
@@ -397,7 +397,7 @@ Build the admin utilisation page in src/app/(app)/:
 **Verify:** log in as the seeded admin account and view utilisation across a date range; log in
 as the regular seeded user and confirm the page is inaccessible.
 
-- [ ] Done
+- [x] Done
 
 ## Phase 20 — Full containerization & final pass
 

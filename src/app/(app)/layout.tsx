@@ -36,6 +36,14 @@ export default async function AppLayout({ children }: LayoutProps<'/'>) {
               Admin
             </Link>
           ) : null}
+          {user.role === 'ADMIN' ? (
+            <Link
+              href="/admin/utilisation"
+              className="text-sm text-gray-500 hover:underline dark:text-gray-400"
+            >
+              Utilisation
+            </Link>
+          ) : null}
         </nav>
         <div className="flex items-center gap-4 text-sm">
           <span className="text-gray-500 dark:text-gray-400">{user.email}</span>
