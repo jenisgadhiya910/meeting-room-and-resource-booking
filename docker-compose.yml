@@ -7,8 +7,10 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
       POSTGRES_DB: ${POSTGRES_DB:-meeting_rooms}
     ports:
-      # Host port is configurable — 5432 is commonly already taken by a local
-      # Postgres install. The container always listens on 5432 internally.
+      # Published on the host only so `yarn db:studio` / `yarn dev` on the host
+      # can reach it — `web` talks to it over the compose network as `db:5432`.
+      # Host port is configurable because 5432 is commonly already taken by a
+      # local Postgres install.
       - '${POSTGRES_PORT:-5433}:5432'
     volumes:
       - db-data:/var/lib/postgresql/data
@@ -22,6 +24,21 @@ services:
       timeout: 5s
       retries: 5
       start_period: 5s
+
+  web:
+    build: .
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # Built from the POSTGRES_* values rather than read from .env's
+      # DATABASE_URL, which points at localhost:$POSTGRES_PORT for host-side
+      # tooling — inside the network the database is `db` on its own 5432.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@db:5432/${POSTGRES_DB:-meeting_rooms}
+      SESSION_SECRET: ${SESSION_SECRET:?SESSION_SECRET must be set in .env (at least 32 characters)}
+    ports:
+      - '3000:3000'
 
 volumes:
   db-data:

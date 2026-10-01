@@ -12,6 +12,7 @@
     "db:migrate": "prisma migrate dev",
     "db:studio": "prisma studio",
     "db:seed": "tsx prisma/seed.ts",
+    "db:seed:bundle": "esbuild prisma/seed.ts --bundle --platform=node --target=node22 --format=esm --outfile=build/seed.mjs --external:argon2 --external:pg-native \"--banner:js=import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);\"",
     "verify:concurrency": "tsx scripts/verify-concurrency.ts",
     "verify:ownership": "tsx scripts/verify-ownership.ts"
   },
@@ -36,6 +37,7 @@
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "esbuild": "0.28.2",
     "eslint": "^9",
     "eslint-config-next": "16.3.4",
     "prettier": "^3.9.6",

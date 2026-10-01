@@ -12,35 +12,51 @@ checkbox per phase.
 
 ## Prerequisites
 
-- Node.js 22+
-- Yarn (Classic, `1.22.x`)
-- Docker, for the Postgres database
+- Docker with Compose v2 — this is all you need to run the app.
+- Node.js 22+ and Yarn Classic (`1.22.x`) — only for host-side work: `yarn dev`,
+  `yarn db:studio`, and the `yarn verify:*` scripts.
 
-## Setup
+## Run it
 
 ```bash
-cp .env.example .env      # adjust POSTGRES_PORT if 5433 is also taken
-docker compose up db -d   # starts Postgres only — the app itself still runs on the host
-yarn install
-yarn db:migrate           # applies all migrations, including the exclusion constraint
-yarn db:seed              # seeds the accounts, rooms and equipment below
-yarn dev
+cp .env.example .env
+# set SESSION_SECRET — at least 32 characters, e.g. `openssl rand -hex 32`
+docker compose up --build
 ```
 
-Confirm it's up:
+Then open <http://localhost:3000> and log in with one of the [seeded accounts](#seeded-accounts).
+Use `localhost`, not a LAN IP: the container runs with `NODE_ENV=production`, so the session
+cookie is `Secure`, and browsers only accept that over plain HTTP on `localhost`.
+
+There are no manual steps. `web` waits for the `db` healthcheck, and every time it starts, its
+entrypoint (`docker/entrypoint.sh`) runs `prisma migrate deploy`, then the seed, then the
+standalone Next.js server. Both steps are safe to repeat on every restart. `migrate deploy` only
+applies migrations not already recorded, and the seed upserts. `docker compose down -v` deletes
+the database volume, so you start fresh next time.
 
 ```bash
 curl localhost:3000/api/health
-# {"status":"ok","env":"development"}
+# {"status":"ok","env":"production"}
 ```
 
-Full containerisation of the app itself (a `web` service, multi-stage Dockerfile,
-non-interactive migrations on boot) lands in a later phase — see `docs/roadmap.md`. Until then,
-Docker Compose only runs the database.
+Postgres is also published on the host at `localhost:$POSTGRES_PORT` (default `5433`). This is
+only so `yarn db:studio` can browse the data, along with the verify scripts' cleanup. The app
+container connects to it over the compose network as `db:5432`.
+
+### Developing on the host instead
+
+```bash
+docker compose up db -d   # Postgres only
+yarn install
+yarn db:migrate           # applies all migrations, including the exclusion constraint
+yarn db:seed
+yarn dev                  # stop the `web` container first — both want port 3000
+```
 
 ## Seeded accounts
 
-`yarn db:seed` is idempotent — safe to re-run — and creates:
+The seed runs automatically on every `web` container start (and via `yarn db:seed` on the host).
+It is idempotent, so it's safe to re-run, and it creates:
 
 | Email               | Role  | Password       |
 | ------------------- | ----- | -------------- |
@@ -174,13 +190,18 @@ them with `403` regardless.
 
 ## Concurrency verification
 
-The headline demo — proves two truly simultaneous overlapping booking requests can never both
-succeed, against a running `yarn dev` server:
+The headline demo. It proves two truly simultaneous overlapping booking requests can never both
+succeed. Run it from the host against the running stack, either `docker compose up` or
+`yarn dev`. Both serve `localhost:3000` and both already have the seeded alice and john accounts:
 
 ```bash
-yarn db:seed              # needs the seeded alice@example.com and john@example.com accounts
+yarn install              # once, for tsx
 yarn verify:concurrency
 ```
+
+The script makes its HTTP requests to `APP_URL` (default `http://localhost:3000`). It uses
+`DATABASE_URL` from `.env` to delete what it created, and that variable already points at the
+compose database's host port.
 
 Fires 20 rounds of two genuinely simultaneous `POST /api/bookings` requests (one from each
 seeded user, `Promise.all`, same room, same slot) and asserts every round comes back exactly
@@ -212,12 +233,12 @@ creates before exiting either way.
 
 ## Environment variables
 
-| Variable                                              | Purpose                                                                                                                                    |
-| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | Credentials the `db` container is initialised with.                                                                                        |
-| `POSTGRES_PORT`                                       | Host port the `db` container is published on. Defaults to `5433`, not `5432`, since a local Postgres install commonly already owns `5432`. |
-| `DATABASE_URL`                                        | Connection string the app uses to reach Postgres. Keep the host/port/user/password/db in sync with the `POSTGRES_*` values above.          |
-| `SESSION_SECRET`                                      | Signs/verifies the session JWT. At least 32 characters; rotating it invalidates every existing session.                                    |
+| Variable                                              | Purpose                                                                                                                                                                                                                                                                                                                                                  |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | Credentials the `db` container is initialised with.                                                                                                                                                                                                                                                                                                      |
+| `POSTGRES_PORT`                                       | Host port the `db` container is published on. Defaults to `5433`, not `5432`, since a local Postgres install commonly already owns `5432`.                                                                                                                                                                                                               |
+| `DATABASE_URL`                                        | Connection string for host-side tooling (`yarn dev`, `db:studio`, `verify:*`) — `localhost:$POSTGRES_PORT`. Keep it in sync with the `POSTGRES_*` values above. The `web` container ignores it: compose builds its own URL to `db:5432` from the `POSTGRES_*` values, so a password with URL-reserved characters (`@`, `/`, `:`) needs percent-encoding. |
+| `SESSION_SECRET`                                      | Signs/verifies the session JWT. At least 32 characters (`openssl rand -hex 32`); rotating it invalidates every existing session. Required: `docker compose up` refuses to start without it.                                                                                                                                                              |
 
 ## Documented decisions
 
@@ -333,3 +354,11 @@ BOOKING_NOT_MODIFIABLE`). Not spelled out explicitly in the spec — a cancelled
 - **Utilisation covers every room that still exists, active or not.** Each room's current
   `active` flag is returned so the UI can mark it. Bookings whose room has since been deleted
   (`roomId` is `null`) have no room to report against and are left out.
+- **The container ships the standalone server plus a separate, minimal migrate/seed toolkit.**
+  `.next/standalone` contains only the node_modules the server traces, so it has no Prisma CLI
+  and no `tsx`. The Dockerfile's `db-tools` stage installs `prisma`, `dotenv` and `argon2` into
+  `/app/db`, using the exact versions `yarn.lock` resolved. The builder bundles `prisma/seed.ts`
+  into one `seed.mjs` with esbuild (`yarn db:seed:bundle`), which resolves the `@/` imports and
+  the generated client at build time. esbuild is pinned as a direct dev dependency at the same
+  version `tsx` already pulls in. The alternative was shipping the full dev `node_modules` and
+  TS sources, which would defeat the point of the standalone build.

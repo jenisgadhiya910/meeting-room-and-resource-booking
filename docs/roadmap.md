@@ -418,7 +418,7 @@ Then run yarn lint --fix && yarn format && yarn typecheck and fix anything that 
 **Verify:** on a clean checkout, `docker compose up` with only `.env` filled in gets you a
 working app — no manual steps.
 
-- [ ] Done
+- [x] Done
 
 ## Notes
 
