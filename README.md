@@ -231,6 +231,28 @@ genuinely unchanged afterward, and the real owner's own cancel must still succee
 403s are ownership working, not the routes being broken outright). Cleans up the booking it
 creates before exiting either way.
 
+## API e2e tests
+
+```bash
+docker compose up -d db   # only the database is needed
+yarn test:e2e             # or `yarn test:e2e:watch`
+```
+
+The suite runs against its own database, `meeting_rooms_test`, in the same Postgres container.
+It never touches the dev data. The global setup in `tests/e2e/support/global-setup.ts` does the
+following:
+
+1. Creates the test database if it is missing.
+2. Runs `prisma migrate deploy`, truncates every table, and runs the seed.
+3. Starts `next dev` on port `3100` against the test database, and stops it when the run ends.
+
+Each test clears bookings, series and audit events first, so tests don't depend on each other.
+The suite refuses to run against any database whose name doesn't end in `_test`.
+
+**Stop `yarn dev` first.** Next.js allows only one `next dev` per project directory, so the
+suite's server can't start while yours is running. The setup reports this when it happens.
+`docker compose up` (the `web` container) doesn't conflict.
+
 ## Environment variables
 
 | Variable                                              | Purpose                                                                                                                                                                                                                                                                                                                                                  |
@@ -238,6 +260,7 @@ creates before exiting either way.
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | Credentials the `db` container is initialised with.                                                                                                                                                                                                                                                                                                      |
 | `POSTGRES_PORT`                                       | Host port the `db` container is published on. Defaults to `5433`, not `5432`, since a local Postgres install commonly already owns `5432`.                                                                                                                                                                                                               |
 | `DATABASE_URL`                                        | Connection string for host-side tooling (`yarn dev`, `db:studio`, `verify:*`) — `localhost:$POSTGRES_PORT`. Keep it in sync with the `POSTGRES_*` values above. The `web` container ignores it: compose builds its own URL to `db:5432` from the `POSTGRES_*` values, so a password with URL-reserved characters (`@`, `/`, `:`) needs percent-encoding. |
+| `TEST_DATABASE_URL` (optional)                        | Database for `yarn test:e2e`. Defaults to `DATABASE_URL` with `_test` appended to the database name. Must end in `_test`, because the suite truncates it. `E2E_PORT` (default `3100`) sets the test server's port.                                                                                                                                       |
 | `SESSION_SECRET`                                      | Signs/verifies the session JWT. At least 32 characters (`openssl rand -hex 32`); rotating it invalidates every existing session. Required: `docker compose up` refuses to start without it.                                                                                                                                                              |
 
 ## Documented decisions
@@ -267,9 +290,11 @@ creates before exiting either way.
   large or fast-changing collection (bookings, if they were ever listed this way, would keep
   keyset pagination). `GET /api/equipment` still paginates by cursor; it backs filter checkboxes
   only, never a paged UI.
-- **No Jest/Vitest/Playwright.** `scripts/verify-concurrency.ts` and `scripts/verify-ownership.ts`
-  are the runnable evidence in place of an automated test suite — a deliberate substitution,
-  documented in `CLAUDE.md`.
+- **Automated tests are backend API e2e only, against a real database.** `tests/e2e/` drives
+  a real `next dev` server over HTTP, backed by a separate `meeting_rooms_test` database. Nothing
+  is mocked, because the behaviour worth testing (the exclusion constraint, ownership checks,
+  audit rows) lives in Postgres and the route layer. There are no unit or UI tests.
+  `scripts/verify-*.ts` stay as the stand-alone demos against a running stack.
 - **A booking can only be made against an `active` room.** Not stated explicitly in the spec;
   the availability search already only ever surfaces active rooms, so `POST /api/bookings`
   rejects a direct request against an inactive or unknown room the same way — `400

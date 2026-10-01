@@ -20,8 +20,9 @@ yarn typecheck                # tsc --noEmit
 yarn db:migrate               # prisma migrate dev
 yarn db:studio                # prisma studio
 yarn db:seed                  # tsx prisma/seed.ts
-yarn verify:concurrency       # tsx scripts/verify-concurrency.ts  (see "No tests" below)
-yarn verify:ownership         # tsx scripts/verify-ownership.ts    (see "No tests" below)
+yarn test:e2e                 # vitest run — API e2e suite against meeting_rooms_test (see "Tests" below)
+yarn verify:concurrency       # tsx scripts/verify-concurrency.ts  (see "Tests" below)
+yarn verify:ownership         # tsx scripts/verify-ownership.ts    (see "Tests" below)
 docker compose up             # full stack; nothing manual beyond a filled-in .env
 ```
 
@@ -47,6 +48,8 @@ src/
 prisma/
   schema.prisma
   migrations/                 # includes hand-written SQL for the exclusion constraint
+tests/e2e/                    # *.e2e.test.ts — API e2e suite (Vitest, real server + test DB)
+  support/                    # global setup, HTTP client, test-DB helpers
 docs/adr/                     # architecture decision records
 ```
 
@@ -58,13 +61,17 @@ or `NextResponse`. Cross-domain calls go service → service, never repository �
 - **No `any`, ever** — including `as any`, `any[]`, and untyped catch bindings. Model the
   shape with an interface, a type alias, a discriminated union, or `unknown` + a narrowing
   guard. If a third-party type is genuinely wrong, write a local declaration and comment why.
-- **No test files.** The owner has opted out of a test suite for this POC. Do not add Jest,
-  Vitest, Playwright, `*.test.ts`, or `__tests__/`. Correctness evidence lives in runnable
-  scripts under `scripts/` instead — most importantly `scripts/verify-concurrency.ts`, which
-  fires two genuinely simultaneous overlapping bookings and asserts exactly one wins. Keep
-  that script working; it is the headline demo. `scripts/verify-ownership.ts` is the same idea
-  for authorisation: guessing someone else's booking id must come back 403, never a successful
-  read, cancel or shorten.
+- **Tests are backend API e2e only.** They live in `tests/e2e/*.e2e.test.ts` and run with
+  Vitest (`yarn test:e2e`). The global setup migrates and seeds a separate `*_test` database
+  (`TEST_DATABASE_URL`, or `DATABASE_URL` with `_test` appended) and starts `next dev` on
+  `E2E_PORT` (default 3100) against it. Tests talk to that server over real HTTP and use Prisma
+  only to arrange time-dependent rows and to assert `audit_events`. Do not add unit tests, UI
+  tests, Jest, Playwright, or `__tests__/`, and do not mock the database: the point is to
+  exercise the real exclusion constraint. `scripts/verify-concurrency.ts` stays the headline
+  demo. It fires two genuinely simultaneous overlapping bookings and asserts exactly one wins,
+  so keep it working. `scripts/verify-ownership.ts` is the same idea for authorisation:
+  guessing someone else's booking id must come back 403, never a successful read, cancel or
+  shorten.
 - **Validate at the boundary.** Every request body, query string and route param is parsed
   with zod inside the route handler. Invalid input is rejected before any service call.
 - **Every mutating route is authenticated**, and ownership is re-checked in the service using
